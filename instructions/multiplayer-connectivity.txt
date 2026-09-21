@@ -1,0 +1,47 @@
+Implement the next stage of the Sequence multiplayer project: allow a client running on a completely different network to connect to the game server over the public internet.
+
+First inspect the existing codebase and understand the current server/client architecture. Do not rewrite the existing game engine or networking architecture unnecessarily.
+
+Goals:
+
+1. Make the server capable of accepting TCP connections from outside the local network.
+2. Ensure the server binds to an appropriate network interface rather than only localhost.
+3. Make the server listening port configurable.
+4. Make the client server address and port configurable so the client does not have the server IP hardcoded.
+5. Preserve the existing authoritative-server architecture:
+
+   * Server owns the authoritative GameState.
+   * Clients send actions.
+   * Server validates actions and determines results.
+   * Clients receive only the state/view they are allowed to see.
+6. Add clear connection and error handling for:
+
+   * Connection refused
+   * Connection timeout
+   * Server unavailable
+   * Unexpected disconnection
+   * Invalid server address/port
+7. Make it possible to run the server on my PC and connect to it from a client on a completely different Wi-Fi/network.
+8. Keep the existing terminal client functionality unchanged.
+9. Do not add authentication, matchmaking, accounts, databases, cloud infrastructure, encryption systems, or other unrelated features at this stage.
+
+Also provide a short setup guide explaining:
+
+* How to configure the server IP/port.
+* How to find the server PC's local IP.
+* What needs to be configured on the router for port forwarding.
+* What Windows Firewall rule is required.
+* How the remote client should connect using the server's public IP and port.
+* How to test this using two genuinely different networks.
+
+Important:
+
+* Do not assume the public IP, local IP, port, router model, or network configuration.
+* Do not expose or hardcode any credentials or sensitive information.
+* Keep the implementation suitable for development/testing rather than production hosting.
+* Explain any changes made to the existing project structure.
+* Add or update tests where practical, especially around connection failure and configuration handling.
+
+The final result should allow this test:
+
+Server PC → home Wi-Fi → public internet → remote laptop on a different network → Sequence client → existing server → complete a game.

@@ -1,0 +1,9 @@
+# Build output
+source/**/bin/
+source/**/obj/
+
+# Server game saves (authoritative state, generated at runtime)
+saves/
+
+# Self-contained publish output (single-file client binary ~65 MB)
+publish/

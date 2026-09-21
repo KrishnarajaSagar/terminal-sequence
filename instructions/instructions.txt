@@ -1,0 +1,681 @@
+You are building the CORE GAME ENGINE for a terminal-based multiplayer implementation of the board game Sequence.
+
+The goal of this project is not to build a polished game UI. The goal is to create a clean, deterministic, testable game engine whose state and actions can later be used by a multiplayer server and multiple terminal clients.
+
+TECHNICAL DIRECTION
+
+Use C# / .NET.
+
+Target a modern supported .NET version.
+
+Build the project so that:
+
+1. The game engine contains all game rules and game state.
+2. The terminal application is only an input/output layer.
+3. Networking is NOT part of the game engine.
+4. Do not put Console.ReadLine(), Console.WriteLine(), sockets, HTTP, or UI logic inside the engine.
+5. The engine must be usable later by:
+   - a local terminal game,
+   - a multiplayer server,
+   - a web client,
+   - automated tests.
+6. The engine must never trust a client to tell it what the resulting game state should be. Clients submit actions. The engine validates and applies them.
+
+For now implement only a 2-player game.
+
+==================================================
+1. GAME RULES
+==================================================
+
+Use the standard Sequence rules for a 2-player game.
+
+Components:
+
+- 104 playing cards = two standard 52-card decks.
+- No jokers.
+- 10x10 board.
+- Four corner spaces are FREE spaces.
+- Every non-Jack card appears exactly twice on the board.
+- Jacks do not appear on the board.
+- Each player has their own colour.
+- Each player receives 7 cards at the start.
+- The first player is chosen by the game/session setup.
+- Players alternate turns.
+- The first player to complete TWO Sequences wins.
+
+A Sequence is:
+
+- exactly or at least five connected spaces,
+- horizontal, vertical, or diagonal,
+- occupied by the same player's chips,
+- with FREE corner spaces counting as belonging to every player.
+
+A completed Sequence becomes locked/protected.
+
+A one-eyed Jack cannot remove a chip that belongs to a completed Sequence.
+
+Two Sequences may overlap by one space.
+
+If a single move creates two valid Sequences, both count.
+
+The game ends immediately when a player reaches the required number of Sequences.
+
+==================================================
+2. BOARD
+==================================================
+
+Represent the board as a 10x10 immutable/configured layout.
+
+The four corners are FREE.
+
+All other 96 spaces contain a card identity.
+
+Each non-Jack card identity must occur exactly twice.
+
+Do NOT generate the board randomly.
+
+Use the standard Sequence board layout.
+
+Store the board layout as data/configuration rather than burying card positions inside game logic.
+
+The engine must be able to answer:
+
+- What card is at a board coordinate?
+- Which board coordinates correspond to a card?
+- Is a coordinate a FREE corner?
+- Is a coordinate occupied?
+- Which player owns an occupied coordinate?
+- Which occupied coordinates are locked as part of a completed Sequence?
+
+Use a coordinate type such as:
+
+BoardPosition(row, column)
+
+Rows and columns should be zero-based internally.
+
+The terminal UI may display them as 1-10.
+
+==================================================
+3. CARDS
+==================================================
+
+Create strongly typed representations for cards.
+
+Do not represent cards internally as arbitrary strings.
+
+Suggested concepts:
+
+Suit:
+- Clubs
+- Diamonds
+- Hearts
+- Spades
+
+Rank:
+- Ace
+- Two
+- Three
+- Four
+- Five
+- Six
+- Seven
+- Eight
+- Nine
+- Ten
+- Jack
+- Queen
+- King
+
+Card should contain Rank + Suit.
+
+There should be exactly two physical copies of every card in the shuffled deck.
+
+A card should have a clear identity suitable for:
+
+- comparison,
+- hashing,
+- serialization,
+- display.
+
+==================================================
+4. JACK RULES
+==================================================
+
+Jacks do not have board positions.
+
+There are two Jack types.
+
+Two-Eyed Jacks:
+
+- Jack of Clubs
+- Jack of Diamonds
+
+Action:
+- Place the player's chip on ANY currently empty non-corner board space.
+- The target does not need to correspond to the Jack.
+- The target cannot be a FREE corner.
+- The target cannot already contain a chip.
+
+One-Eyed Jacks:
+
+- Jack of Hearts
+- Jack of Spades
+
+Action:
+- Remove one opponent chip from the board.
+- The removed chip must not belong to a completed Sequence.
+- A player cannot remove their own chip.
+- Playing a one-eyed Jack removes a chip only. The same turn does not place one of the player's chips.
+
+After playing any Jack, the player draws one replacement card normally.
+
+==================================================
+5. NORMAL CARD PLAY
+==================================================
+
+On a normal turn:
+
+1. Player chooses one card from their hand.
+2. That card is discarded into the player's visible discard pile.
+3. The player chooses one of the matching board positions for that card.
+4. The selected position must:
+   - correspond to that card,
+   - not be occupied,
+   - not be a FREE corner.
+5. Place the player's chip there.
+6. Check whether this creates one or more new Sequences.
+7. Register any newly completed Sequences as locked.
+8. Draw one replacement card.
+9. If the player has now reached two Sequences, the game ends immediately.
+
+Important:
+
+A normal card may correspond to two different board positions.
+
+The player must be able to choose between them.
+
+If one matching position is occupied and the other is free, the player must use the free position.
+
+If both matching positions are occupied, the card is a DEAD CARD.
+
+==================================================
+6. DEAD CARDS
+==================================================
+
+A dead card is a normal card whose two corresponding board spaces are both occupied.
+
+On their turn, if a player has a dead card, they may exchange it:
+
+1. Select the dead card.
+2. Discard it.
+3. Draw a replacement card.
+4. Continue their normal turn.
+
+The replacement card may itself be playable or dead.
+
+Do not allow a player to exchange a card that still has at least one legal matching board position.
+
+The engine should expose a method such as:
+
+CanExchangeDeadCard(playerId, card)
+
+and
+
+ExchangeDeadCard(playerId, card)
+
+The exchange must be represented as a legal game action and validated by the engine.
+
+==================================================
+7. TURN MODEL
+==================================================
+
+Represent turns explicitly.
+
+A player's turn should have a clear lifecycle.
+
+The engine must know:
+
+- whose turn it is,
+- what actions are currently legal,
+- whether the player must first exchange a dead card,
+- whether the player has already played a card,
+- whether the player still needs to draw,
+- whether the game has ended.
+
+Do not allow clients to perform actions out of order.
+
+For example:
+
+- Player 2 cannot act during Player 1's turn.
+- A player cannot play two normal cards in one turn.
+- A card cannot be drawn twice.
+- A card cannot be played if it is not in the player's hand.
+- A dead-card exchange must use a genuinely dead card.
+- A normal card cannot be played onto an occupied board space.
+
+The engine should reject invalid actions with explicit error results.
+
+Do not use exceptions for ordinary user mistakes.
+
+==================================================
+8. GAME STATE
+==================================================
+
+Create a central immutable or carefully controlled GameState representation.
+
+It should contain at least:
+
+- game status
+- current player
+- players
+- player hands
+- draw pile
+- discard piles
+- board state
+- chip ownership
+- locked Sequence positions
+- completed Sequence records
+- turn information
+- winner, when applicable
+
+The state must be sufficient to completely reconstruct the current game.
+
+Do not rely on hidden mutable variables outside the game state.
+
+==================================================
+9. ACTION MODEL
+==================================================
+
+Model player decisions as explicit actions.
+
+For example:
+
+PlayCardAction
+- playerId
+- card
+- targetPosition
+
+PlayTwoEyedJackAction
+- playerId
+- card
+- targetPosition
+
+PlayOneEyedJackAction
+- playerId
+- card
+- targetPosition
+
+ExchangeDeadCardAction
+- playerId
+- card
+
+Do not let the client directly mutate GameState.
+
+Instead:
+
+GameState + PlayerAction
+        ↓
+     validator
+        ↓
+     game logic
+        ↓
+ updated GameState
+        ↓
+ game events / result
+
+==================================================
+10. EVENTS
+==================================================
+
+The engine should produce structured events/results when an action is successfully applied.
+
+Examples:
+
+GameStarted
+CardPlayed
+ChipPlaced
+ChipRemoved
+DeadCardExchanged
+CardDrawn
+SequenceCompleted
+GameWon
+TurnChanged
+
+Events should contain enough information for a terminal client to display what happened.
+
+Do not make event objects depend on Console or networking.
+
+The event model should also make future multiplayer synchronization easier.
+
+==================================================
+11. INFORMATION VISIBILITY
+==================================================
+
+The full GameState is an internal engine concept.
+
+Later, different clients may need different views of the game.
+
+Therefore provide a way to derive a player-specific view/state.
+
+A player's opponent hand must NOT be exposed to them.
+
+A player's own hand is visible.
+
+The draw pile contents must NOT be exposed.
+
+The discard piles are visible.
+
+The board is visible.
+
+The current player is visible.
+
+Completed Sequences are visible.
+
+This distinction is important because this engine will eventually power network multiplayer.
+
+Do not send hidden information to a client and merely "hide it in the UI."
+
+==================================================
+12. SEQUENCE DETECTION
+==================================================
+
+Sequence detection is a core part of the engine and must be deterministic.
+
+Whenever a chip is placed or removed:
+
+- evaluate all potentially affected horizontal, vertical, and diagonal lines,
+- detect newly completed Sequences,
+- ensure the same Sequence is not counted multiple times,
+- allow two Sequences to overlap by one chip,
+- treat FREE corners as occupied by every player,
+- protect completed Sequence positions from one-eyed Jacks.
+
+Do not simply scan the board in a way that accidentally treats every possible five-cell window as a separate Sequence if they belong to the same longer line.
+
+A line of six or more chips may contain multiple possible groups of five. The engine should determine the appropriate Sequence records without double-counting the same underlying completed line incorrectly.
+
+Define this behavior clearly in the implementation and tests.
+
+==================================================
+13. DRAW PILE
+==================================================
+
+Use a seeded/randomizable shuffle mechanism.
+
+Do NOT call an uncontrolled global random generator from arbitrary places in the engine.
+
+The game/session should receive a random source or seed.
+
+This is important because tests must be reproducible.
+
+When the draw pile becomes empty:
+
+- collect eligible discarded cards,
+- shuffle them,
+- create a new draw pile,
+- keep the most recently played/discarded card rules consistent with the physical game.
+
+Encapsulate deck recycling in its own component.
+
+Do not mix deck management with board logic.
+
+==================================================
+14. TERMINAL APPLICATION
+==================================================
+
+Create a very simple terminal client on top of the engine.
+
+The terminal UI should be intentionally basic.
+
+It must display:
+
+- game status,
+- player name,
+- current turn,
+- player's hand,
+- board,
+- completed Sequences,
+- useful error messages,
+- available legal actions.
+
+Example style:
+
+========================================
+             SEQUENCE
+========================================
+
+Player 1: Sagar
+Your turn
+
+Hand:
+1. 7H
+2. QS
+3. JC
+4. 4D
+5. 9S
+6. KH
+7. 2C
+
+Board:
+
+     1   2   3   4   5   6   7   8   9  10
+ 1   * 10S QS KS AS 2D 3D 4D 5D   *
+ 2  9S 10H 9H 8H 7H 6H 5H 4H 3H 6D
+ ...
+
+Your action:
+> play 1 3,4
+
+The exact display can evolve.
+
+Do not spend time making the terminal UI pretty.
+
+==================================================
+15. MULTIPLAYER PREPARATION
+==================================================
+
+Although networking is not part of this implementation, design the engine so it can later be used like this:
+
+                    GAME ENGINE
+                         |
+                  GameState / Events
+                         |
+                  Multiplayer Server
+                    /           \
+             Client 1         Client 2
+             Terminal         Terminal
+
+A client submits an action.
+
+The server passes that action to the engine.
+
+The engine validates and applies it.
+
+The server broadcasts the resulting public events/state.
+
+The clients render the result.
+
+The engine must therefore be completely authoritative.
+
+Never design the engine around:
+
+"client changes board and sends result to server."
+
+Instead design it around:
+
+"client requests action and engine decides result."
+
+==================================================
+16. TESTING
+==================================================
+
+Write automated unit tests for the engine.
+
+At minimum test:
+
+Deck:
+- deck contains 104 cards,
+- every normal card exists twice,
+- every Jack exists twice,
+- shuffle is deterministic when seeded.
+
+Board:
+- board is 10x10,
+- exactly four FREE corners,
+- every non-Jack card occurs exactly twice,
+- Jacks have no board positions.
+
+Normal moves:
+- legal card placement,
+- selecting either matching position,
+- occupied position rejected,
+- card not in hand rejected,
+- opponent turn rejected.
+
+Jacks:
+- two-eyed Jack can place on empty non-corner space,
+- cannot place on occupied space,
+- cannot place on corner,
+- one-eyed Jack removes opponent chip,
+- cannot remove own chip,
+- cannot remove locked Sequence chip.
+
+Dead cards:
+- correctly identify dead cards,
+- reject exchange of playable cards,
+- exchange dead card correctly,
+- replacement card is drawn.
+
+Sequences:
+- horizontal five,
+- vertical five,
+- diagonal five,
+- sequences involving corners,
+- overlapping sequences,
+- six-or-more lines,
+- sequence locking,
+- one-eyed Jack protection,
+- winning on second Sequence.
+
+Game flow:
+- correct initial hands,
+- correct turn switching,
+- correct draw behavior,
+- game ends immediately after winning,
+- no actions allowed after game ends.
+
+==================================================
+17. ARCHITECTURE
+==================================================
+
+Prefer a clean structure similar to:
+
+Sequence.Domain
+    Card
+    Deck
+    Board
+    BoardPosition
+    Player
+    GameState
+    Sequence
+    Actions
+    Events
+
+Sequence.Engine
+    GameEngine
+    MoveValidator
+    SequenceDetector
+    DeckManager
+    StateProjection / PlayerView
+
+Sequence.Terminal
+    Program
+    TerminalRenderer
+    TerminalInput
+    LocalGameRunner
+
+Sequence.Tests
+    unit tests
+
+Do not create unnecessary abstractions simply to appear "enterprise."
+
+Keep the code understandable.
+
+Prefer composition over a complicated inheritance hierarchy.
+
+==================================================
+18. IMPORTANT ENGINE DESIGN RULE
+==================================================
+
+The most important architectural requirement is:
+
+THE GAME ENGINE MUST NOT KNOW THAT A TERMINAL EXISTS.
+
+It must also not know that a network exists.
+
+It should operate conceptually like:
+
+GameState StartGame(GameSetup setup)
+
+ActionResult ApplyAction(GameState state, PlayerAction action)
+
+PlayerView GetPlayerView(GameState state, PlayerId playerId)
+
+GameState + Action → validated result + new state/events
+
+This is the foundation for the multiplayer version.
+
+==================================================
+19. IMPLEMENTATION ORDER
+==================================================
+
+Implement in this order:
+
+1. Card model
+2. Deck
+3. Board layout
+4. Board state
+5. Player and hand
+6. Game state
+7. Sequence detection
+8. Move validation
+9. Action processing
+10. Dead cards
+11. Win detection
+12. Player-specific state projection
+13. Unit tests
+14. Basic terminal renderer
+15. Basic terminal input loop
+
+Do not implement networking yet.
+
+==================================================
+20. CODING STYLE
+==================================================
+
+Before writing code:
+
+1. Briefly explain the architecture.
+2. Identify any rule ambiguity you detect.
+3. State the assumptions you are making.
+4. Then implement the solution.
+
+Do not invent additional gameplay rules.
+
+Do not add:
+- timers,
+- bots,
+- matchmaking,
+- accounts,
+- persistence,
+- database,
+- animations,
+- sound,
+- web UI,
+- AI,
+- scoring systems,
+- achievements.
+
+The goal is a small but properly engineered Sequence game engine that can later become the authoritative core of a multiplayer application.
+
+Most importantly, keep the rules engine deterministic, testable, and independent of presentation and networking.

@@ -1,0 +1,521 @@
+I have completed a simple 2-player, terminal-based Sequence game.
+
+The basic game logic currently works locally.
+
+I now want to evolve this project into a proper multiplayer application so that I can learn multiplayer game architecture and networking.
+
+Do NOT jump straight into implementation. First inspect the current project structure and code, understand what already exists, and identify what needs to change.
+
+The goal is to proceed incrementally rather than rewriting the project.
+
+==================================================
+CURRENT GOAL
+============
+
+Turn the existing local terminal game into an architecture where:
+
+```
+Terminal Client
+      |
+      | Player Actions
+      v
+   Game Server
+      |
+      v
+  Game Engine
+      |
+      v
+   Game State
+```
+
+The server should eventually become authoritative.
+
+The clients should never directly modify the game state.
+
+==================================================
+STEP 1 - SEPARATE ENGINE FROM TERMINAL
+======================================
+
+First verify that the game engine is independent of the terminal UI.
+
+The game engine should contain:
+
+* GameState
+* Player
+* Card
+* Board
+* Deck
+* Sequence detection
+* Rules
+* Turn management
+* Move validation
+* Game actions
+* Game results/events
+
+The terminal layer should contain:
+
+* Reading user input
+* Parsing commands
+* Rendering the board
+* Rendering the player's hand
+* Rendering game status
+* Displaying errors/results
+
+The engine must NOT depend on:
+
+* Console.ReadLine()
+* Console.WriteLine()
+* terminal cursor manipulation
+* ANSI escape sequences
+* networking
+* sockets
+* UI-specific classes
+
+If the current implementation mixes these concerns, refactor them before proceeding.
+
+The test for this step is:
+
+The entire terminal project could theoretically be deleted and the game engine could still run through automated tests.
+
+==================================================
+STEP 2 - MAKE THE ENGINE ACTION-BASED
+=====================================
+
+The game engine should receive explicit player actions instead of allowing the UI to directly manipulate game state.
+
+Use a structure conceptually like:
+
+```
+GameState + PlayerAction
+         |
+         v
+    GameEngine
+         |
+         v
+   ActionResult
+         |
+   +-----+------+
+   |            |
+```
+
+New State       Events
+
+Examples of actions:
+
+* PlayCardAction
+* PlayTwoEyedJackAction
+* PlayOneEyedJackAction
+* ExchangeDeadCardAction
+
+The engine must:
+
+1. Validate the action.
+2. Check that the player is allowed to perform it.
+3. Apply the action.
+4. Update the game state.
+5. Produce appropriate events/results.
+6. Reject invalid actions without allowing the state to be modified.
+
+The terminal client should only create actions and pass them to the engine.
+
+It should never perform the actual game logic itself.
+
+==================================================
+STEP 3 - INTRODUCE A SERVER ABSTRACTION
+=======================================
+
+Before implementing actual networking, introduce the concept of a game server.
+
+The server should own:
+
+* GameState
+* GameEngine
+* Players
+* Processing of player actions
+
+Conceptually:
+
+```
+Client
+   |
+   | SubmitAction()
+   v
+Server
+   |
+   v
+GameEngine
+   |
+   v
+GameState
+```
+
+The server should expose operations conceptually similar to:
+
+```
+ConnectPlayer()
+SubmitAction()
+GetPlayerView()
+```
+
+Initially this can all run inside a single process.
+
+Do NOT implement sockets yet.
+
+The purpose of this step is to establish the server as the authoritative owner of the game before introducing network complexity.
+
+==================================================
+STEP 4 - CREATE PLAYER-SPECIFIC GAME VIEWS
+==========================================
+
+The server owns the complete GameState.
+
+However, a client should only receive information that its player is allowed to know.
+
+For example:
+
+Player 1 can see:
+
+* Their own hand
+* The board
+* Opponent chip positions
+* Discard pile
+* Current turn
+* Completed sequences
+* Public game information
+
+Player 1 must NOT see:
+
+* Player 2's hand
+* Contents of the draw pile
+* Other hidden/private information
+
+Create something conceptually like:
+
+```
+GameState
+    |
+    v
+CreatePlayerView(playerId)
+    |
+    v
+PlayerView
+```
+
+The PlayerView is what the terminal client should render.
+
+Do not simply send the complete GameState to the client and rely on the UI to hide private information.
+
+The server must enforce information visibility.
+
+==================================================
+STEP 5 - ADD ACTUAL NETWORKING
+==============================
+
+Once the previous architecture works locally, add actual networking.
+
+Use TCP for the first implementation.
+
+Do not introduce unnecessary technologies such as:
+
+* UDP
+* WebSockets
+* SignalR
+* matchmaking
+* authentication
+* databases
+* cloud infrastructure
+
+The first objective is simply:
+
+```
+Server
+  |
+  +------ Terminal Client 1
+  |
+  +------ Terminal Client 2
+```
+
+Both clients should connect to the server.
+
+A client should:
+
+1. Connect.
+2. Receive its initial PlayerView.
+3. Display the game.
+4. Create a PlayerAction from user input.
+5. Send that action to the server.
+6. Receive the resulting update.
+7. Render the updated state.
+
+The server should:
+
+1. Accept connections.
+2. Assign players.
+3. Receive actions.
+4. Validate actions through the GameEngine.
+5. Update authoritative GameState.
+6. Send appropriate updates to the clients.
+
+==================================================
+STEP 6 - DEFINE A NETWORK PROTOCOL
+==================================
+
+Do not use arbitrary strings as the long-term communication format.
+
+Define explicit network messages.
+
+For example:
+
+Client → Server:
+
+```
+PlayCard
+PlayTwoEyedJack
+PlayOneEyedJack
+ExchangeDeadCard
+```
+
+Server → Client:
+
+```
+GameStarted
+GameStateUpdated
+ActionRejected
+CardPlayed
+ChipPlaced
+ChipRemoved
+SequenceCompleted
+TurnChanged
+GameWon
+```
+
+JSON is acceptable for the first implementation.
+
+The important principle is:
+
+The client sends an ACTION.
+
+The server determines the RESULT.
+
+The client does not send modified game state to the server.
+
+==================================================
+STEP 7 - RUN TWO INDEPENDENT TERMINAL CLIENTS
+=============================================
+
+The first major milestone is:
+
+```
+Terminal Window 1
+    Player 1
+
+Terminal Window 2
+    Player 2
+```
+
+Both connect to the same server.
+
+Example:
+
+```
+Server
+localhost:5000
+```
+
+The board should be visible in both terminals.
+
+Each client should see:
+
+* The same public board state
+* Its own hand
+* Its opponent's chip placements
+* Turn information
+* Sequence count
+* Public game information
+
+Each client should only be able to submit actions for its own player.
+
+When Player 1 makes a valid move:
+
+```
+Player 1 Terminal
+      |
+      v
+   Server
+      |
+      v
+  Game Engine
+      |
+      v
+  New State
+      |
+   +--+--+
+   |     |
+   v     v
+Player 1 Player 2
+Terminal Terminal
+```
+
+Both clients should update appropriately.
+
+==================================================
+STEP 8 - TEST FAILURE CONDITIONS
+================================
+
+Once basic multiplayer works, deliberately test failure cases.
+
+At minimum test:
+
+* Client disconnects during its turn.
+* Client reconnects.
+* Client attempts to play an invalid card.
+* Client attempts to play during the opponent's turn.
+* Client submits the same action twice.
+* Client sends malformed data.
+* Client sends an action for another player.
+* Two actions arrive close together.
+* Client attempts to access hidden information.
+* Server shuts down and restarts.
+
+Do not try to solve every problem immediately.
+
+The purpose is to understand which problems belong to:
+
+* The game engine
+* The server
+* The network layer
+* The client
+
+==================================================
+STEP 9 - ADD PERSISTENCE
+========================
+
+After the server becomes authoritative, add game persistence.
+
+The server should be able to save and restore the authoritative GameState.
+
+For the first implementation, use JSON files.
+
+For example:
+
+```
+saves/
+    game-001.json
+```
+
+The save should contain everything necessary to resume the game.
+
+The client should NOT be responsible for authoritative persistence.
+
+The server should:
+
+```
+Start
+  |
+  v
+Load GameState
+  |
+  v
+Accept players
+  |
+  v
+Continue game
+```
+
+Do not introduce a database unless there is an actual requirement for one.
+
+==================================================
+STEP 10 - IMPROVE THE TERMINAL UI
+=================================
+
+Only after the multiplayer architecture works should the terminal UI be improved.
+
+The terminal should behave like a full-screen game interface.
+
+The board should remain visible at all times.
+
+The screen should contain approximately:
+
+```
++----------------------------------------------+
+|                  SEQUENCE                    |
++----------------------------------------------+
+| Player information                           |
+| Turn / status / sequences                    |
++----------------------------------------------+
+|                                              |
+|              10 x 10 BOARD                   |
+|                                              |
++----------------------------------------------+
+| YOUR HAND                                    |
+| [1] 7H [2] QC [3] JD [4] 4S ...             |
++----------------------------------------------+
+| > Input                                      |
++----------------------------------------------+
+```
+
+Use terminal cursor positioning and ANSI colours if useful.
+
+However, rendering should remain completely separate from the game engine.
+
+The engine should have no knowledge that the game is displayed in a terminal.
+
+==================================================
+IMPORTANT ARCHITECTURAL PRINCIPLES
+==================================
+
+Keep these principles throughout the implementation:
+
+1. The GameEngine owns the rules.
+
+2. The Server owns the authoritative GameState.
+
+3. Clients submit actions.
+
+4. Clients never submit modified game state.
+
+5. The server validates every action.
+
+6. Clients receive PlayerViews containing only information they are allowed to see.
+
+7. The terminal UI only renders state and collects input.
+
+8. Networking must not be embedded inside the GameEngine.
+
+9. Persistence belongs to the server/application layer, not the rules engine.
+
+10. Keep the engine deterministic and testable.
+
+==================================================
+IMPLEMENTATION APPROACH
+=======================
+
+Do not implement all steps at once.
+
+For every step:
+
+1. Inspect the existing implementation.
+2. Explain what currently works.
+3. Identify the smallest required architectural change.
+4. Implement that change.
+5. Run/build the project.
+6. Run existing tests.
+7. Add tests for the new behavior.
+8. Verify that existing game functionality still works.
+9. Only then move to the next step.
+
+Do not rewrite functioning code unnecessarily.
+
+The purpose of this project is educational as well as functional. Explain important multiplayer concepts when they first appear, particularly:
+
+* authoritative servers
+* client/server architecture
+* state synchronization
+* actions vs state
+* serialization
+* hidden information
+* connection lifecycle
+* disconnect/reconnect
+* persistence
+
+Keep the implementation practical rather than introducing enterprise-level abstractions for a two-player Sequence game.

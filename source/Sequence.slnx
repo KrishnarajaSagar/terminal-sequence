@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Sequence.Domain/Sequence.Domain.csproj" />
+    <Project Path="src/Sequence.Engine/Sequence.Engine.csproj" />
+    <Project Path="src/Sequence.Server/Sequence.Server.csproj" />
+    <Project Path="src/Sequence.Contracts/Sequence.Contracts.csproj" />
+    <Project Path="src/Sequence.Terminal/Sequence.Terminal.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Sequence.Tests/Sequence.Tests.csproj" />
+  </Folder>
+</Solution>
