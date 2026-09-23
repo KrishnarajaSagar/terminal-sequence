@@ -16,6 +16,8 @@ public static class Program
         Console.OutputEncoding = Encoding.UTF8;
         try
         {
+            // Command-line dispatch is kept so tests, scripts, and remote sessions can
+            // still drive the game non-interactively. The menus are the interactive path.
             if (Args.HasFlag(args, "--server"))
             {
                 RunServer(args);
@@ -28,24 +30,14 @@ public static class Program
                 return;
             }
 
-            // Local hot-seat game. The first numeric argument is the deck seed.
-            int seed = args.Length > 0 && int.TryParse(args[0], out int parsed) ? parsed : Random.Shared.Next();
+            if (Console.IsInputRedirected)
+            {
+                // Piped input has no arrow keys: keep the classic scriptable hot-seat path.
+                RunLocalHotSeat(args);
+                return;
+            }
 
-            AnsiConsole.WriteLine();
-            AnsiConsole.MarkupLine("[bold yellow]S E Q U E N C E[/]");
-
-            string firstName = PromptName(1);
-            PlayerColor firstColor = PromptColor(1, null);
-
-            string secondName = PromptName(2);
-            PlayerColor secondColor = PromptColor(2, firstColor);
-
-            LocalGameRunner.Run(new GameSetup(
-                firstName,
-                secondName,
-                seed,
-                FirstPlayerColor: firstColor,
-                SecondPlayerColor: secondColor));
+            RunMenuLoop(args);
         }
         catch (ArgumentException ex)
         {
@@ -54,23 +46,94 @@ public static class Program
         }
     }
 
+    /// <summary>Local hot-seat game with into-line name/color prompts (piped input).</summary>
+    private static void RunLocalHotSeat(string[] args)
+    {
+        // The first numeric argument is the deck seed.
+        int seed = args.Length > 0 && int.TryParse(args[0], out int parsed) ? parsed : Random.Shared.Next();
+
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[bold yellow]S E Q U E N C E[/]");
+
+        string firstName = PromptName(1);
+        PlayerColor firstColor = PromptColor(1, null);
+
+        string secondName = PromptName(2);
+        PlayerColor secondColor = PromptColor(2, firstColor);
+
+        LocalGameRunner.Run(new GameSetup(
+            firstName,
+            secondName,
+            seed,
+            FirstPlayerColor: firstColor,
+            SecondPlayerColor: secondColor));
+    }
+
+    /// <summary>
+    /// Interactive menu loop: main menu, then host/join forms that run the server or the
+    /// client. Each game ending (or failing) returns here so the player can start another.
+    /// </summary>
+    private static void RunMenuLoop(string[] args)
+    {
+        _ = args; // reserved: future menu-bypass flags.
+
+        AnsiConsole.Profile.Capabilities.Ansi = !Console.IsOutputRedirected;
+        IAnsiConsole console = AnsiConsole.Console;
+        IMenuInput input = MenuInput.Create();
+
+        while (true)
+        {
+            switch (MainMenu.Show(input, console))
+            {
+                case MainMenuChoice.Exit:
+                    return;
+
+                case MainMenuChoice.Host:
+                    HostSettings? host = HostForm.Show(input, console);
+                    if (host is null)
+                    {
+                        continue;
+                    }
+
+                    RunServerCore(host.Value);
+                    break;
+
+                case MainMenuChoice.Join:
+                    ConnectionSettings? join = ConnectionMenu.Show(input, console);
+                    if (join is null)
+                    {
+                        continue;
+                    }
+
+                    RunClientCore(join.Value);
+                    break;
+            }
+        }
+    }
+
     private static void RunServer(string[] args)
     {
-        Console.OutputEncoding = Encoding.UTF8;
         int seed = Args.ArgInt(args, "--seed", Random.Shared.Next());
         int port = Args.ReadPort(args, Args.DefaultPort);
         string? resume = Args.ArgString(args, "--resume");
         string? save = Args.ArgString(args, "--save");
         IPAddress bind = Args.ReadBindAddress(args);
 
+        RunServerCore(port, bind, seed, save ?? GameStateStore.DefaultSaveName, resume);
+    }
+
+    private static void RunServerCore(HostSettings settings) =>
+        RunServerCore(settings.Port, settings.Bind, settings.Seed, settings.SaveName, resume: null);
+
+    private static void RunServerCore(int port, IPAddress bind, int seed, string saveName, string? resume)
+    {
+        Console.OutputEncoding = Encoding.UTF8;
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[bold yellow]S E Q U E N C E[/]");
         Console.WriteLine("Server mode. Two clients join this process:");
         Console.WriteLine($"  1. Start a client with '--client --host <this-pc-ip|public-ip> --port {port} --player your-id'.");
         Console.WriteLine($"  2. Bind interface: {DisplayAddress(bind)}.");
         Console.WriteLine($"Deck seed {seed}; each client requests its chip color on join (default: first green, second blue).");
-
-        string saveName = save ?? GameStateStore.DefaultSaveName;
 
         GameServer server;
         if (!string.IsNullOrWhiteSpace(resume))
@@ -96,8 +159,55 @@ public static class Program
         host.Start();
 
         PrintListeningInfo(host);
-        Console.WriteLine("Press Ctrl+C to stop.");
 
+        if (Console.IsInputRedirected)
+        {
+            // Scripted/CI servers have no live keyboard: keep the classic Ctrl+C stop.
+            Console.WriteLine("Press Ctrl+C to stop.");
+            WaitForCtrlC();
+        }
+        else
+        {
+            RunHostLobby(host);
+        }
+
+        host.Stop();
+        Console.WriteLine("Server stopped.");
+    }
+
+    /// <summary>
+    /// Interactive host lobby: renders who is connected, polls the roster so a joined
+    /// player appears without any new server events, and stops the server on Esc or
+    /// Ctrl+C so the menu can take the host back to the main menu.
+    /// </summary>
+    private static void RunHostLobby(GameHost host)
+    {
+        var wait = new ManualResetEventSlim(false);
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            wait.Set();
+        };
+
+        string bindText = DisplayAddress(host.BindAddress);
+        string localAddresses = string.Join(", ", LocalIPv4Addresses());
+
+        while (!wait.IsSet)
+        {
+            LobbyScreen.RenderHost(AnsiConsole.Console, bindText, host.Port, host.Roster, localAddresses);
+
+            if (ConsoleKeys.EscapePressed())
+            {
+                wait.Set();
+                break;
+            }
+
+            wait.Wait(TimeSpan.FromMilliseconds(250));
+        }
+    }
+
+    private static void WaitForCtrlC()
+    {
         var wait = new ManualResetEventSlim(false);
         Console.CancelKeyPress += (_, e) =>
         {
@@ -106,8 +216,6 @@ public static class Program
         };
 
         wait.Wait();
-        host.Stop();
-        Console.WriteLine("Server stopped.");
     }
 
     private static void PrintListeningInfo(GameHost host)
@@ -170,13 +278,23 @@ public static class Program
         string playerId = Args.ArgString(args, "--player") ?? PromptPlayerId();
         PlayerColor? preferredColor = ResolveClientColor(args);
 
+        RunClientCore(new ConnectionSettings(host, port, playerId, preferredColor, timeoutSeconds));
+    }
+
+    private static void RunClientCore(ConnectionSettings settings)
+    {
         try
         {
-            NetworkGameRunner.Run(host, port, playerId, preferredColor, TimeSpan.FromSeconds(timeoutSeconds));
+            NetworkGameRunner.Run(
+                settings.Host,
+                settings.Port,
+                settings.PlayerId,
+                settings.PreferredColor,
+                TimeSpan.FromSeconds(settings.TimeoutSeconds));
         }
         catch (Exception ex)
         {
-            foreach (string line in ConnectFailure.Describe(host, port, timeoutSeconds, ex))
+            foreach (string line in ConnectFailure.Describe(settings.Host, settings.Port, settings.TimeoutSeconds, ex))
             {
                 Console.WriteLine(line);
             }

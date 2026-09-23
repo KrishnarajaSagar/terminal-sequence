@@ -77,22 +77,20 @@ internal static class Args
     public static IPAddress ReadBindAddress(string[] args)
     {
         string? value = ArgString(args, "--bind");
-        if (value is null)
-        {
-            return IPAddress.Any;
-        }
-
-        return value.Trim().ToLowerInvariant() switch
-        {
-            "any" or "0.0.0.0" or "*" => IPAddress.Any,
-            "loopback" or "localhost" or "127.0.0.1" => IPAddress.Loopback,
-            "ipv6any" or "::" => IPAddress.IPv6Any,
-            "ipv6loopback" or "::1" => IPAddress.IPv6Loopback,
-            _ when IPAddress.TryParse(value, out IPAddress? ip) => ip!,
-            _ => throw new ArgumentException(
-                $"Invalid bind address '{value}' - use 'any'/'0.0.0.0' (all interfaces), 'loopback'/'127.0.0.1' (this PC only), or a specific adapter IP."),
-        };
+        return value is null ? IPAddress.Any : ParseBindAddress(value);
     }
+
+    /// <summary>Parses a single bind-address value (shared by the flag path and the Host menu).</summary>
+    public static IPAddress ParseBindAddress(string value) => value.Trim().ToLowerInvariant() switch
+    {
+        "any" or "0.0.0.0" or "*" => IPAddress.Any,
+        "loopback" or "localhost" or "127.0.0.1" => IPAddress.Loopback,
+        "ipv6any" or "::" => IPAddress.IPv6Any,
+        "ipv6loopback" or "::1" => IPAddress.IPv6Loopback,
+        _ when IPAddress.TryParse(value, out IPAddress? ip) => ip!,
+        _ => throw new ArgumentException(
+            $"Invalid bind address '{value}' - use 'any'/'0.0.0.0' (all interfaces), 'loopback'/'127.0.0.1' (this PC only), or a specific adapter IP."),
+    };
 
     /// <summary>Rejects scheme/port-bearing or obviously malformed address strings up front.</summary>
     public static bool IsPlausibleHost(string host)

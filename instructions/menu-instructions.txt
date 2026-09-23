@@ -1,0 +1,96 @@
+Implement a terminal menu UI for the existing 2-player Sequence game.
+
+Important: The previously attempted mouse/cursor functionality is NOT working and has broken the current application. Do not implement, modify, restore, or depend on any mouse functionality in this task. The game must remain keyboard-driven.
+
+First inspect the existing codebase and understand the current client, networking, and game flow. Make incremental changes and avoid rewriting working game logic.
+
+Goals:
+
+1. Replace the need to type terminal commands with an interactive keyboard-driven menu.
+
+2. Create a simple main menu:
+
+   SEQUENCE
+
+   1. Host Game
+   2. Join Game
+   3. Exit
+
+3. Add a Join Game screen where the player can enter:
+
+   * Server address
+   * Server port
+
+   Provide sensible development defaults such as localhost and the existing port.
+
+4. Add a simple lobby screen after connecting:
+
+   * Show connection status.
+   * Show Player 1 / Player 2 status.
+   * Display a waiting message while the second player connects.
+   * Start the game automatically once both players are connected, if that matches the existing server architecture.
+
+5. Integrate the existing game screen into this flow without changing the game rules or networking protocol unnecessarily.
+
+6. Organize the terminal client around clear UI states, for example:
+
+   * MainMenu
+   * ConnectionMenu
+   * Lobby
+   * Game
+
+7. Make the terminal UI visually appealing and colorful using ONLY capabilities already available in the standard .NET console/terminal environment.
+
+   Use things such as:
+
+   * Console.ForegroundColor
+   * Console.BackgroundColor where appropriate
+   * Console.Clear()
+   * Borders and box drawing characters
+   * Highlighted menu selections
+   * Consistent headings and status messages
+
+   Do NOT add third-party UI libraries, terminal UI frameworks, NuGet packages, or other external dependencies.
+
+8. Keep keyboard navigation simple and reliable:
+
+   * Arrow keys can navigate menus.
+   * Enter selects an option.
+   * Escape goes back where appropriate.
+   * Number keys may be supported if convenient.
+
+9. Do not require the player to type commands such as "host", "join", or other command-line instructions to navigate the application.
+
+10. Preserve the existing architecture:
+
+    * Game engine remains independent of terminal UI.
+    * Server remains authoritative.
+    * Client sends actions to the server.
+    * Server validates actions and determines game results.
+    * Terminal UI only handles presentation and user input.
+
+11. Do not modify the game rules, card logic, board logic, server authority, or networking behavior unless a change is strictly required to integrate the menu.
+
+12. Do not implement mouse support in this task. Remove or disable any broken mouse/cursor code only if necessary to restore the existing keyboard-based functionality.
+
+13. Handle common UI situations cleanly:
+
+    * Failed connection
+    * Server unavailable
+    * Invalid server address/port
+    * Player disconnects
+    * Player waiting for opponent
+    * Returning to the main menu
+
+14. Keep the implementation reasonably simple. This is a learning project for multiplayer networking, not a production terminal UI framework.
+
+Before making major changes, inspect the existing implementation and reuse existing functionality wherever possible.
+
+At the end, provide:
+
+* A summary of files/classes changed.
+* A summary of the new UI flow.
+* Instructions for running the server and two clients using the new menus.
+* Any known limitations.
+
+Most importantly: do not break the currently working keyboard-based multiplayer functionality while adding the menus.

@@ -49,6 +49,23 @@ public static class NetworkGameRunner
         PlayerView view = ReceiveInitialGameStarted(messages);
         messages.ViewerId = view.ViewerId;
 
+        // Interactive consoles get a short lobby frame: it shows connection status and a
+        // waiting message, and leaves as soon as an opponent-related message arrives (the
+        // roster refresh the host pushes when they join) or within a short grace. The
+        // grace matters because the second client receives no new message on its own join
+        // and must not sit in the lobby forever. Esc disconnects and returns to the menu.
+        if (!Console.IsInputRedirected)
+        {
+            PlayerView? lobbyView = WaitForOpponentInLobby(messages, view, host, port);
+            if (lobbyView is null)
+            {
+                Console.WriteLine("Left the lobby. Goodbye.");
+                return;
+            }
+
+            view = lobbyView;
+        }
+
         string? footer = null;
         using (ITurnPump pump = TurnPump.Create())
         {
@@ -133,6 +150,48 @@ public static class NetworkGameRunner
             }
         }
     }
+
+    /// <summary>
+    /// The brief connected-lobby wait. Renders every tick, exits with the first message
+    /// that confirms the game can proceed (a roster refresh or a state update), and falls
+    /// through to the board when nothing arrives within the grace period. Returns null
+    /// when the player presses Escape to leave the lobby.
+    /// </summary>
+    private static PlayerView? WaitForOpponentInLobby(ServerMessageChannel messages, PlayerView initial, string host, int port)
+    {
+        PlayerView view = initial;
+        DateTime deadline = DateTime.UtcNow + ClientLobbyGrace;
+
+        while (DateTime.UtcNow < deadline)
+        {
+            LobbyScreen.RenderClient(AnsiConsole.Console, host, port, view);
+
+            if (messages.TryRead(100) is { } message)
+            {
+                if (message is GameStartedMessage started)
+                {
+                    return started.View;
+                }
+
+                if (message is GameStateUpdatedMessage updated)
+                {
+                    return updated.View;
+                }
+
+                // A disconnect notice or a rejection while nobody has begun is not
+                // playable yet; keep polling until the roster confirms the opponent.
+            }
+
+            if (ConsoleKeys.EscapePressed())
+            {
+                return null;
+            }
+        }
+
+        return view;
+    }
+
+    private static readonly TimeSpan ClientLobbyGrace = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// Blocks until a state-bearing message arrives. Informational noise (an opponent
