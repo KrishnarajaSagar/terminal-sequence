@@ -33,65 +33,37 @@ public sealed record TurnCommand(TurnCommandKind Kind, string? Text, ClientMessa
 
 /// <summary>
 /// Drives the turn-prompting flow shared by the on-device and networked clients. Given
-/// the viewer's <see cref="PlayerView"/> it reads the terminal through an
-/// <see cref="ITurnPump"/> (typing or mouse clicks), parses keyboard input through
-/// <see cref="TerminalInput"/>, and produces a <see cref="ClientMessage"/> the caller
-/// routes to the authoritative server. Reading prompt order and messages match the
-/// original hot-seat behaviour exactly; mouse clicks simply prepopulate the same choices.
+/// the viewer's <see cref="PlayerView"/> it reads line input through an
+/// <see cref="ITurnPump"/>, parses it through <see cref="TerminalInput"/>, and produces
+/// a <see cref="ClientMessage"/> the caller routes to the authoritative server. Reading
+/// prompt order and messages match the original hot-seat behaviour exactly.
 /// </summary>
 public static class ActionBuilder
 {
     public static TurnCommand BuildTurn(PlayerView view, ITurnPump pump)
     {
-        // Step 1: choose a hand card (or a shortcut command).
-        while (true)
+        string? line = pump.Next(null);
+        if (!TerminalInput.TryParseStep(line, view.Hand.Count, out Step step, out string stepError))
         {
-            InputEvent input = pump.Next(null);
-            Step? step = null;
+            return TurnCommand.Footer(stepError);
+        }
 
-            switch (input.Kind)
-            {
-                case InputEventKind.Line:
-                    if (!TerminalInput.TryParseStep(input.Line, view.Hand.Count, out Step parsed, out string stepError))
-                    {
-                        return TurnCommand.Footer(stepError);
-                    }
+        switch (step.Intent)
+        {
+            case StepIntent.Quit:
+                return TurnCommand.Quit();
 
-                    step = parsed;
-                    break;
+            case StepIntent.Help:
+                return TurnCommand.Help(HelpText());
 
-                case InputEventKind.HandClick:
-                    if (input.HandIndex is int handIndex && handIndex >= 1 && handIndex <= view.Hand.Count)
-                    {
-                        step = new Step(StepIntent.SelectCard, handIndex);
-                    }
+            case StepIntent.ExchangeCard:
+                return TurnCommand.Submit(new ExchangeDeadCardMessage(view.Hand[step.CardIndex - 1]));
 
-                    break;
+            case StepIntent.SelectCard:
+                return ResolvePlacement(view, pump, view.Hand[step.CardIndex - 1]);
 
-                case InputEventKind.BoardClick:
-                    // Board clicks during card pick are highlight-only feedback.
-                    continue;
-            }
-
-            if (step is null)
-            {
-                continue;
-            }
-
-            switch (step.Intent)
-            {
-                case StepIntent.Quit:
-                    return TurnCommand.Quit();
-
-                case StepIntent.Help:
-                    return TurnCommand.Help(HelpText());
-
-                case StepIntent.ExchangeCard:
-                    return TurnCommand.Submit(new ExchangeDeadCardMessage(view.Hand[step.CardIndex - 1]));
-
-                case StepIntent.SelectCard:
-                    return ResolvePlacement(view, pump, view.Hand[step.CardIndex - 1]);
-            }
+            default:
+                return TurnCommand.Footer("Unrecognised input; type 'help' for the list of commands.");
         }
     }
 
@@ -99,7 +71,7 @@ public static class ActionBuilder
     {
         if (selected.IsJack)
         {
-            return ResolveJackTarget(view, pump, selected);
+            return ResolveJackTarget(pump, selected);
         }
 
         // Normal card: show the 1-2 open board positions and let the player pick one.
@@ -121,120 +93,35 @@ public static class ActionBuilder
         }
 
         const string prompt = "  pick a position (or 'back') > ";
-        while (true)
+        string? pickLine = pump.Next(prompt);
+        if (!TerminalInput.TryParseOptionPick(pickLine, openSpots.Length, out OptionChoice pick, out string pickError))
         {
-            InputEvent input = pump.Next(prompt);
-            switch (input.Kind)
-            {
-                case InputEventKind.Line:
-                    if (!TerminalInput.TryParseOptionPick(input.Line, openSpots.Length, out OptionChoice pick, out string pickError))
-                    {
-                        return TurnCommand.Footer(pickError);
-                    }
-
-                    if (pick.IsBack)
-                    {
-                        return TurnCommand.Footer(null);
-                    }
-
-                    return TurnCommand.Submit(new PlayCardMessage(selected, openSpots[pick.Index - 1]));
-
-                case InputEventKind.HandClick:
-                    return TurnCommand.Footer(null); // pick a different card; the next frame is clean
-
-                case InputEventKind.BoardClick:
-                    if (input.Board is BoardPosition clicked && openSpots.Contains(clicked))
-                    {
-                        return TurnCommand.Submit(new PlayCardMessage(selected, clicked));
-                    }
-
-                    return TurnCommand.Footer($"{selected.Code} can only be played on the numbered spaces above.");
-            }
+            return TurnCommand.Footer(pickError);
         }
+
+        if (pick.IsBack)
+        {
+            return TurnCommand.Footer(null);
+        }
+
+        return TurnCommand.Submit(new PlayCardMessage(selected, openSpots[pick.Index - 1]));
     }
 
-    private static TurnCommand ResolveJackTarget(PlayerView view, ITurnPump pump, Card card)
+    private static TurnCommand ResolveJackTarget(ITurnPump pump, Card card)
     {
         string prompt = $"  {TargetPrompt(card)} (or 'back') > ";
-        while (true)
+        string? line = pump.Next(prompt);
+        if (!TerminalInput.TryParseTarget(line, out TargetChoice choice, out string jackError))
         {
-            InputEvent input = pump.Next(prompt);
-            switch (input.Kind)
-            {
-                case InputEventKind.Line:
-                    if (!TerminalInput.TryParseTarget(input.Line, out TargetChoice choice, out string jackError))
-                    {
-                        return TurnCommand.Footer(jackError);
-                    }
-
-                    if (choice.IsBack)
-                    {
-                        return TurnCommand.Footer(null);
-                    }
-
-                    return SubmitJack(card, new BoardPosition(choice.Row - 1, choice.Col - 1));
-
-                case InputEventKind.HandClick:
-                    return TurnCommand.Footer(null); // pick a different card; the next frame is clean
-
-                case InputEventKind.BoardClick:
-                    if (input.Board is BoardPosition clicked)
-                    {
-                        string? rejection = RejectJackTarget(view, card, clicked);
-                        return rejection is null
-                            ? SubmitJack(card, clicked)
-                            : TurnCommand.Footer(rejection);
-                    }
-
-                    return TurnCommand.Footer("Click a board space, or type row,column.");
-            }
-        }
-    }
-
-    /// <summary>Pre-validates a clicked board space against the same rules the engine applies.</summary>
-    private static string? RejectJackTarget(PlayerView view, Card card, BoardPosition target)
-    {
-        if (card.IsTwoEyedJack)
-        {
-            if (!target.IsInsideBoard)
-            {
-                return "That space is outside the board.";
-            }
-
-            if (BoardLayout.Standard.IsFreeCorner(target))
-            {
-                return "A chip cannot be placed on a FREE corner.";
-            }
-
-            if (view.Board.IsOccupied(target))
-            {
-                return $"{target} already holds a chip.";
-            }
-
-            return null;
+            return TurnCommand.Footer(jackError);
         }
 
-        if (!target.IsInsideBoard)
+        if (choice.IsBack)
         {
-            return "That space is outside the board.";
+            return TurnCommand.Footer(null);
         }
 
-        if (!view.Board.IsOccupied(target))
-        {
-            return "A one-eyed Jack removes an opponent's chip; there is no chip here.";
-        }
-
-        if (view.Board.IsLocked(target))
-        {
-            return "A chip of a completed Sequence cannot be removed.";
-        }
-
-        if (view.Board.ChipsAt(target) == view.ViewerId)
-        {
-            return "A player cannot remove their own chip.";
-        }
-
-        return null;
+        return SubmitJack(card, new BoardPosition(choice.Row - 1, choice.Col - 1));
     }
 
     private static TurnCommand SubmitJack(Card card, BoardPosition target) =>

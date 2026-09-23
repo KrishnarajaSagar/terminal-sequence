@@ -68,6 +68,41 @@ public class GameServerTests
     }
 
     [Fact]
+    public void A_Preferred_Color_Is_Assigned_On_A_Clients_First_Join()
+    {
+        var server = NewServer();
+        PlayerId seatA = server.ConnectPlayer("a", PlayerColor.Yellow);
+        PlayerId seatB = server.ConnectPlayer("b", PlayerColor.Cyan);
+
+        Assert.Equal(PlayerColor.Yellow, server.GetPlayerView(seatA).Viewer.Color);
+        Assert.Equal(PlayerColor.Cyan, server.GetPlayerView(seatB).Viewer.Color);
+    }
+
+    [Fact]
+    public void A_Taken_Preference_Falls_Back_To_The_Seats_Default_Color()
+    {
+        var server = NewServer();
+        PlayerId seatA = server.ConnectPlayer("a"); // no preference: green (setup default)
+        PlayerId seatB = server.ConnectPlayer("b", PlayerColor.Green); // already taken
+
+        Assert.Equal(PlayerColor.Green, server.GetPlayerView(seatA).Viewer.Color);
+        Assert.Equal(PlayerColor.Blue, server.GetPlayerView(seatB).Viewer.Color);
+    }
+
+    [Fact]
+    public void A_Reconnect_Keeps_The_Color_The_Seat_Already_Owns()
+    {
+        var server = NewServer();
+        PlayerId seat = server.ConnectPlayer("a", PlayerColor.Yellow);
+        server.DisconnectPlayer("a");
+
+        PlayerId again = server.ConnectPlayer("a", PlayerColor.Magenta);
+
+        Assert.Equal(seat, again);
+        Assert.Equal(PlayerColor.Yellow, server.GetPlayerView(seat).Viewer.Color);
+    }
+
+    [Fact]
     public void Unconnected_Client_Cannot_Act()
     {
         var server = NewServer();

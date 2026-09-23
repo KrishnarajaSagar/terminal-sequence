@@ -82,6 +82,12 @@ public sealed record GameState(
         return this with { Players = Players.SetItem(index, Players[index] with { Name = name }) };
     }
 
+    public GameState WithPlayerColor(PlayerId playerId, PlayerColor color)
+    {
+        int index = Players.FindIndex(p => p.Id == playerId);
+        return this with { Players = Players.SetItem(index, Players[index] with { Color = color }) };
+    }
+
     public GameState WithBoard(BoardState board) => this with { Board = board };
 
     public GameState WithDrawPile(ImmutableQueue<Card> drawPile) => this with { DrawPile = drawPile };

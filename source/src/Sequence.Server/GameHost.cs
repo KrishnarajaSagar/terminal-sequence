@@ -113,7 +113,9 @@ public sealed partial class GameHost : IAsyncDisposable
         var connection = new ClientConnection(client);
         try
         {
-            string? clientId = await ReceiveHelloAsync(connection.Stream, ct);
+            string? clientId;
+            PlayerColor? preferredColor;
+            (clientId, preferredColor) = await ReceiveHelloAsync(connection.Stream, ct);
             if (clientId is null)
             {
                 connection.Close();
@@ -129,7 +131,7 @@ public sealed partial class GameHost : IAsyncDisposable
             PlayerId seat;
             try
             {
-                seat = _server.ConnectPlayer(clientId);
+                seat = _server.ConnectPlayer(clientId, preferredColor);
             }
             catch (InvalidOperationException)
             {
@@ -153,6 +155,7 @@ public sealed partial class GameHost : IAsyncDisposable
             _server.RenamePlayer(clientId, clientId);
 
             await connection.SendFrameAsync(EncodeServerMessage(new GameStartedMessage(_server.GetPlayerView(seat))), ct).ConfigureAwait(false);
+            await NotifyRosterChangeAsync(connection, ct).ConfigureAwait(false);
 
             while (!ct.IsCancellationRequested)
             {
@@ -231,6 +234,23 @@ public sealed partial class GameHost : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Pushes a fresh roster to every already-connected client when one joins or
+    /// reconnects, so a sitting player's frame reflects the announced display name
+    /// instead of the setup default (e.g. "Player 2") right away.
+    /// </summary>
+    private async Task NotifyRosterChangeAsync(ClientConnection joined, CancellationToken ct)
+    {
+        foreach (ClientConnection connection in _clients.Values)
+        {
+            if (connection.Registered && !ReferenceEquals(connection, joined))
+            {
+                var roster = new GameStartedMessage(_server.GetPlayerView(connection.Seat));
+                await connection.SendFrameAsync(EncodeServerMessage(roster), ct).ConfigureAwait(false);
+            }
+        }
+    }
+
     private async Task CloseAndUnregisterAsync(ClientConnection connection)
     {
         if (_clients.TryRemove(connection.ClientId, out _))
@@ -270,12 +290,12 @@ public sealed partial class GameHost : IAsyncDisposable
         connection.Close();
     }
 
-    private static async Task<string?> ReceiveHelloAsync(NetworkStream stream, CancellationToken ct)
+    private static async Task<(string? ClientId, PlayerColor? PreferredColor)> ReceiveHelloAsync(NetworkStream stream, CancellationToken ct)
     {
         byte[]? frame = await ProtocolFraming.ReadFrameAsync(stream, ct).ConfigureAwait(false);
         if (frame is null)
         {
-            return null;
+            return (null, null);
         }
 
         HelloMessage hello = JsonSerializer.Deserialize<HelloMessage>(frame, ProtocolJson.Options)!;
@@ -285,7 +305,7 @@ public sealed partial class GameHost : IAsyncDisposable
             throw new JsonException("HelloMessage must carry a non-empty client id.");
         }
 
-        return clientId;
+        return (clientId, hello.PreferredColor);
     }
 
     private static ClientMessage? TryDeserializeClientMessage(byte[] frame)

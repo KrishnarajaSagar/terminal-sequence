@@ -43,6 +43,15 @@ public class GameHostTests
         return (firstView, secondView);
     }
 
+    /// <summary>
+    /// Joining the second client makes the host push a fresher roster to the first, so
+    /// tests that read further messages from it must consume that refresh first.
+    /// </summary>
+    private static async Task DrainFirstRosterRefresh(TestClient first)
+    {
+        Assert.IsType<GameStartedMessage>(await first.AwaitServerMessageAsync());
+    }
+
     private static PlayCardMessage FirstOpenPlay(PlayerView view)
     {
         Card card = view.Hand.First(c =>
@@ -79,12 +88,45 @@ public class GameHostTests
     }
 
     [Fact]
+    public async Task The_First_Client_Is_Sent_A_Fresh_Roster_When_The_Second_Joins()
+    {
+        await using GameHost host = NewHost(out _);
+        await using var first = new TestClient { Id = FirstId };
+        await using var second = new TestClient { Id = SecondId };
+
+        PlayerView alone = Assert.IsType<GameStartedMessage>(await first.JoinAsync(host.Port, FirstId)).View;
+        Assert.Equal("Bob", alone.Players.Single(p => p.Id != alone.ViewerId).Name);
+
+        _ = Assert.IsType<GameStartedMessage>(await second.JoinAsync(host.Port, SecondId)).View;
+
+        // The refresh the host pushes to the first client carries the new display name.
+        var refresh = Assert.IsType<GameStartedMessage>(await first.AwaitServerMessageAsync());
+        Assert.Equal(SecondId, refresh.View.Players.Single(p => p.Id != refresh.View.ViewerId).Name);
+    }
+
+    [Fact]
+    public async Task A_Clients_Requested_Chip_Color_Is_Used_Over_The_Wire()
+    {
+        await using GameHost host = NewHost(out _);
+        await using var first = new TestClient { Id = FirstId };
+        await using var second = new TestClient { Id = SecondId };
+
+        PlayerView firstView = Assert.IsType<GameStartedMessage>(await first.JoinAsync(host.Port, FirstId, PlayerColor.Yellow)).View;
+        PlayerView secondView = Assert.IsType<GameStartedMessage>(await second.JoinAsync(host.Port, SecondId, PlayerColor.Magenta)).View;
+
+        Assert.Equal(PlayerColor.Yellow, firstView.Viewer.Color);
+        Assert.Equal(PlayerColor.Magenta, secondView.Viewer.Color);
+        Assert.NotEqual(firstView.Viewer.Color, secondView.Viewer.Color);
+    }
+
+    [Fact]
     public async Task A_Move_From_One_Client_Is_Broadcast_To_Both()
     {
         await using GameHost host = NewHost(out _);
         await using var first = new TestClient { Id = FirstId };
         await using var second = new TestClient { Id = SecondId };
         (PlayerView firstView, PlayerView secondView) = await JoinBoth(host, first, second);
+        await DrainFirstRosterRefresh(first);
 
         (TestClient mover, PlayerView moverView, PlayerView waitingView) = firstView.IsYourTurn
             ? (first, firstView, secondView)
@@ -112,6 +154,7 @@ public class GameHostTests
         await using var first = new TestClient { Id = FirstId };
         await using var second = new TestClient { Id = SecondId };
         (PlayerView firstView, PlayerView secondView) = await JoinBoth(host, first, second);
+        await DrainFirstRosterRefresh(first);
 
         (TestClient mover, PlayerView moverView, _) = firstView.IsYourTurn
             ? (first, firstView, secondView)
@@ -134,6 +177,7 @@ public class GameHostTests
         await using var first = new TestClient { Id = FirstId };
         await using var second = new TestClient { Id = SecondId };
         (PlayerView firstView, PlayerView secondView) = await JoinBoth(host, first, second);
+        await DrainFirstRosterRefresh(first);
 
         // Whoever is not the opening player tries to move during the opening turn.
         (TestClient acting, PlayerView actingView, _) = firstView.IsYourTurn
@@ -153,6 +197,7 @@ public class GameHostTests
         await using var first = new TestClient { Id = FirstId };
         await using var second = new TestClient { Id = SecondId };
         (PlayerView firstView, PlayerView secondView) = await JoinBoth(host, first, second);
+        await DrainFirstRosterRefresh(first);
 
         (TestClient mover, PlayerView moverView, _) = firstView.IsYourTurn
             ? (first, firstView, secondView)
@@ -195,6 +240,7 @@ public class GameHostTests
 
         PlayerView firstView = Assert.IsType<GameStartedMessage>(await first.JoinAsync(host.Port, FirstId)).View;
         PlayerView secondView = Assert.IsType<GameStartedMessage>(await second.JoinAsync(host.Port, SecondId)).View;
+        await DrainFirstRosterRefresh(first);
         await second.DisposeAsync();
 
         var notice = Assert.IsType<PlayerDisconnectedMessage>(await first.AwaitServerMessageAsync());
@@ -211,6 +257,7 @@ public class GameHostTests
 
         PlayerView firstView = Assert.IsType<GameStartedMessage>(await first.JoinAsync(host.Port, FirstId)).View;
         PlayerView secondView = Assert.IsType<GameStartedMessage>(await second.JoinAsync(host.Port, SecondId)).View;
+        await DrainFirstRosterRefresh(first);
 
         // The opening player acts so the turn moves to the other client.
         (TestClient mover, PlayerView moverView, _) = firstView.IsYourTurn
@@ -267,6 +314,7 @@ public class GameHostTests
             Assert.Null(lastSaved);
 
             PlayerView secondView = Assert.IsType<GameStartedMessage>(await second.JoinAsync(host.Port, SecondId)).View;
+            await DrainFirstRosterRefresh(first);
 
             (TestClient mover, PlayerView moverView) = firstView.IsYourTurn
                 ? (first, firstView)
@@ -301,16 +349,16 @@ public class GameHostTests
         public string Id { get; init; } = string.Empty;
 
         /// <summary>Connects and announces the identity; the first server message is returned.</summary>
-        public async Task<ServerMessage> JoinAsync(int port, string id)
+        public async Task<ServerMessage> JoinAsync(int port, string id, PlayerColor? color = null)
         {
-            return await ConnectAndSayHelloAsync(port, id);
+            return await ConnectAndSayHelloAsync(port, id, color);
         }
 
-        public async Task<ServerMessage> ConnectAndSayHelloAsync(int port, string id)
+        public async Task<ServerMessage> ConnectAndSayHelloAsync(int port, string id, PlayerColor? color = null)
         {
             await _tcp.ConnectAsync(IPAddress.Loopback, port);
             _stream = _tcp.GetStream();
-            await ProtocolFraming.WriteFrameAsync(_stream, JsonSerializer.SerializeToUtf8Bytes(new HelloMessage(id)));
+            await ProtocolFraming.WriteFrameAsync(_stream, JsonSerializer.SerializeToUtf8Bytes(new HelloMessage(id, color)));
             return await AwaitEofOrMessageAsync() ?? throw new IOException("Server closed the connection before the game started.");
         }
 

@@ -85,10 +85,12 @@ public sealed class GameServer
     /// <summary>
     /// Binds a client identity to a free seat (first seat, then second seat). A known
     /// client keeps its existing seat. Clients that disconnected are remembered, so a
-    /// reconnect reclaims the same seat as long as nobody else took it. Throws when both
-    /// seats are already taken.
+    /// reconnect reclaims the same seat as long as nobody else took it. On a client's
+    /// first join its requested <paramref name="preferredColor"/> is applied when that
+    /// color is still free; reconnects keep the color the seat already owns. Throws when
+    /// both seats are already taken.
     /// </summary>
-    public PlayerId ConnectPlayer(string clientId)
+    public PlayerId ConnectPlayer(string clientId, PlayerColor? preferredColor = null)
     {
         lock (_gate)
         {
@@ -98,7 +100,8 @@ public sealed class GameServer
             }
 
             PlayerId seat;
-            if (_lastSeatOfClient.TryGetValue(clientId, out PlayerId previous) && !_seatOfClient.ContainsValue(previous))
+            bool reclaiming = _lastSeatOfClient.TryGetValue(clientId, out PlayerId previous);
+            if (reclaiming && !_seatOfClient.ContainsValue(previous))
             {
                 seat = previous;
             }
@@ -115,11 +118,19 @@ public sealed class GameServer
                 throw new InvalidOperationException("The game is full. Both seats are taken.");
             }
 
+            if (!reclaiming && preferredColor is { } color && !SeatInUse(color))
+            {
+                _state = _state.WithPlayerColor(seat, color);
+            }
+
             _seatOfClient[clientId] = seat;
             _lastSeatOfClient[clientId] = seat;
             return seat;
         }
     }
+
+    private bool SeatInUse(PlayerColor color) =>
+        _state.Players.Any(p => p.Color == color);
 
     /// <summary>Releases a client's seat. Its actions are refused until it reconnects.</summary>
     public void DisconnectPlayer(string clientId)

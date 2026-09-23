@@ -26,16 +26,14 @@ public static class LocalGameRunner
         PlayerId guestSeat = server.ConnectPlayer(guestClient);
 
         string? footer = null;
-        PlayerView initial = server.GetPlayerView(server.CurrentPlayerId);
 
-        using (ITurnPump pump = TurnPump.Create(initial, initial.SequenceTarget, footer))
+        using (ITurnPump pump = TurnPump.Create())
         {
             while (true)
             {
                 PlayerId current = server.CurrentPlayerId;
                 PlayerView view = server.GetPlayerView(current);
-                pump.BeginTurn(view, view.SequenceTarget, footer, view.Viewer.Color);
-                TerminalRenderer.RenderFullScreen(view, view.SequenceTarget, footer, pump.Hover, pump.HoverColor, pump.HoveredHand);
+                TerminalRenderer.RenderFullScreen(view, view.SequenceTarget, footer);
                 footer = null;
 
                 if (view.Status == GameStatus.Won)

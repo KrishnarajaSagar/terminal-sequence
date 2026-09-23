@@ -15,13 +15,7 @@ public static class TerminalRenderer
     private const int BoardRows = 10;
     private const int HandTileWidth = 5;
 
-    public static void RenderFullScreen(
-        PlayerView view,
-        int sequenceTarget,
-        string? footer = null,
-        BoardPosition? hovered = null,
-        PlayerColor hoverColor = default,
-        int? hoveredHand = null)
+    public static void RenderFullScreen(PlayerView view, int sequenceTarget, string? footer = null)
     {
         (int width, int height) = WindowSize();
 
@@ -32,7 +26,7 @@ public static class TerminalRenderer
         BoardGeometry geometry = BoardGeometry.Compute(width, height);
         if (geometry.IsStacked)
         {
-            RenderStacked(view, geometry, footer, hovered, hoverColor, hoveredHand);
+            RenderStacked(view, geometry, footer);
             return;
         }
 
@@ -44,24 +38,16 @@ public static class TerminalRenderer
         int rightPanelWidth = geometry.PanelWidth;
 
         var left = new List<string>();
-        BuildBoard(left, view, cellWidth, cellRows, hovered, hoverColor);
+        BuildBoard(left, view, cellWidth, cellRows);
 
         var right = new List<string>();
         BuildRightPanel(right, view, sequenceTarget);
-        int shift = view.HasExchangedDeadCardThisTurn ? 1 : 0;
 
         int totalRows = Math.Max(left.Count, right.Count);
         for (int i = 0; i < totalRows; i++)
         {
             string leftLine = i < left.Count ? left[i] : string.Empty;
             string rightLine = i < right.Count ? TruncatePlain(right[i], rightPanelWidth) : string.Empty;
-
-            // Tint the hand card the pointer is over (hand tiles start at panel index 6+shift).
-            if (hoveredHand is int hand && rightLine.Length > 0 && i - 6 - shift == hand)
-            {
-                rightLine = $"[on {ColorName(hoverColor)}]{rightLine}[/]";
-            }
-
             MarkupLine(PadPlain(leftLine, boardWidth + gutter) + rightLine);
         }
 
@@ -69,24 +55,18 @@ public static class TerminalRenderer
         RenderPrompt(view, footer);
     }
 
-    private static void RenderStacked(
-        PlayerView view,
-        BoardGeometry geometry,
-        string? footer,
-        BoardPosition? hovered,
-        PlayerColor hoverColor,
-        int? hoveredHand)
+    private static void RenderStacked(PlayerView view, BoardGeometry geometry, string? footer)
     {
         // Cramped terminal: fall back to the stacked layout (board, then hand).
         var boardLines = new List<string>();
-        BuildBoard(boardLines, view, geometry.CellWidth, geometry.CellRows, hovered, hoverColor);
+        BuildBoard(boardLines, view, geometry.CellWidth, geometry.CellRows);
         foreach (string line in boardLines)
         {
             MarkupLine(line);
         }
 
         BlankLine();
-        BuildHandBelow(view, geometry, hoveredHand, hoverColor);
+        BuildHandBelow(view);
         BlankLine();
         RenderPrompt(view, footer);
     }
@@ -111,7 +91,7 @@ public static class TerminalRenderer
 
     // ------------------------------------------------------------------ board
 
-    private static void BuildBoard(List<string> lines, PlayerView view, int cellWidth, int cellRows, BoardPosition? hovered, PlayerColor hoverColor)
+    private static void BuildBoard(List<string> lines, PlayerView view, int cellWidth, int cellRows)
     {
         string gutter = new(' ', 2);
         var colLabel = new StringBuilder();
@@ -132,7 +112,7 @@ public static class TerminalRenderer
 
             for (int col = 0; col < BoardRows; col++)
             {
-                string[] block = BoardCell(view, row, col, cellWidth, cellRows, hovered, hoverColor);
+                string[] block = BoardCell(view, row, col, cellWidth, cellRows);
                 string gap = col < BoardRows - 1 ? " " : string.Empty;
                 for (int line = 0; line < cellRows; line++)
                 {
@@ -155,15 +135,14 @@ public static class TerminalRenderer
         lines.Add(Markup.Escape(HorizontalBorder(cellWidth, '└', '┴', '┘')));
     }
 
-    private static string[] BoardCell(PlayerView view, int row, int col, int cellWidth, int cellRows, BoardPosition? hovered, PlayerColor hoverColor)
+    private static string[] BoardCell(PlayerView view, int row, int col, int cellWidth, int cellRows)
     {
         var pos = new BoardPosition(row, col);
         bool locked = view.Board.IsLocked(pos);
         Card? card = BoardLayout.Standard.GetCardAt(pos);
         PlayerId? owner = view.Board.ChipsAt(pos);
         bool hasChip = owner is not null;
-        bool isHovered = hovered is { } hoverPosition && hoverPosition == pos;
-        string background = locked ? "[on gold1]" : isHovered ? $"[on {ColorName(hoverColor)}]" : string.Empty;
+        string background = locked ? "[on gold1]" : string.Empty;
         string reset = background.Length == 0 ? string.Empty : "[/]";
 
         string[] lines = new string[cellRows];
@@ -373,7 +352,7 @@ public static class TerminalRenderer
 
     // ------------------------------------------------------------------ stacked hand (cramped terminals)
 
-    private static void BuildHandBelow(PlayerView view, BoardGeometry geometry, int? hoveredHand, PlayerColor hoverColor)
+    private static void BuildHandBelow(PlayerView view)
     {
         MarkupLine("[bold]YOUR HAND[/]");
         if (view.Hand.Count == 0)
@@ -393,7 +372,7 @@ public static class TerminalRenderer
 
         for (int i = 0; i < view.Hand.Count; i++)
         {
-            string[] block = HandTileBlock(view, i + 1, view.Hand[i], hoveredHand == i + 1, hoverColor);
+            string[] block = HandTileBlock(view, i + 1, view.Hand[i]);
             for (int line = 0; line < lines.Length; line++)
             {
                 lines[line].Append(block[line]);
@@ -408,13 +387,13 @@ public static class TerminalRenderer
     }
 
     /// <summary>The five text rows that draw one hand tile (label, top, middle, bottom, hint).</summary>
-    private static string[] HandTileBlock(PlayerView view, int handIndex, Card card, bool hovered, PlayerColor hoverColor)
+    private static string[] HandTileBlock(PlayerView view, int handIndex, Card card)
     {
         int tile = HandTileWidth;
         int faceWidth = tile - 2;
         (string borderColor, string hint, string hintColor) = HandCardStyle(view, card);
 
-        string[] rows =
+        return new[]
         {
             Center(Markup.Escape($"[{handIndex}]"), tile),
             $"{borderColor}┌{Repeat('─', tile - 2)}┐[/]",
@@ -422,17 +401,6 @@ public static class TerminalRenderer
             $"{borderColor}└{Repeat('─', tile - 2)}┘[/]",
             $"{hintColor}{Center(Markup.Escape(hint), tile)}[/]",
         };
-
-        if (hovered)
-        {
-            string tint = $"[on {ColorName(hoverColor)}]";
-            for (int i = 0; i < rows.Length; i++)
-            {
-                rows[i] = tint + rows[i] + "[/]";
-            }
-        }
-
-        return rows;
     }
 
     private static (string BorderColor, string Hint, string HintColor) HandCardStyle(PlayerView view, Card card)
@@ -444,121 +412,6 @@ public static class TerminalRenderer
 
         bool dead = IsDeadCard(view, card);
         return dead ? ("[red dim]", "DEAD", "[red]") : ("[green]", "PLAY", "[green]");
-    }
-
-    // ------------------------------------------------------------------ mouse patches
-
-    /// <summary>
-    /// Repaints a single board cell in place (with or without the hover highlight).
-    /// Used by the input pump so the pointer can light cells without redrawing the
-    /// whole frame or disturbing the line the player is typing on.
-    /// </summary>
-    public static void PatchCell(PlayerView view, BoardPosition position, bool hovered, PlayerColor hoverColor, BoardGeometry geometry)
-    {
-        (int Left, int Top)? caret = SaveCaret();
-        try
-        {
-            string[] block = BoardCell(
-                view,
-                position.Row,
-                position.Col,
-                geometry.CellWidth,
-                geometry.CellRows,
-                hovered ? position : null,
-                hoverColor);
-
-            int left = geometry.OriginCol + position.Col * (geometry.CellWidth + 1);
-            int top = geometry.OriginRow + position.Row * (geometry.CellRows + 1);
-            WriteBlock(block, left, top);
-        }
-        finally
-        {
-            RestoreCaret(caret);
-        }
-    }
-
-    /// <summary>Repaints a single hand card (panel line or stacked tile) with the pointer state.</summary>
-    public static void PatchHandCard(PlayerView view, int cardIndex, bool hovered, PlayerColor hoverColor, BoardGeometry geometry)
-    {
-        if (cardIndex < 1 || cardIndex > view.Hand.Count)
-        {
-            return;
-        }
-
-        (int Left, int Top)? caret = SaveCaret();
-        try
-        {
-            if (geometry.IsStacked)
-            {
-                string[] block = HandTileBlock(view, cardIndex, view.Hand[cardIndex - 1], hovered, hoverColor);
-                WriteBlock(block, (cardIndex - 1) * 6, geometry.HandTileFirstRow);
-            }
-            else
-            {
-                string line = HandCardLine(view, cardIndex, view.Hand[cardIndex - 1]);
-                if (hovered)
-                {
-                    line = $"[on {ColorName(hoverColor)}]{line}[/]";
-                }
-
-                Console.SetCursorPosition(geometry.PanelCol, geometry.HandRow(cardIndex, view.HasExchangedDeadCardThisTurn));
-                AnsiConsole.Markup(PadPlain(line, geometry.PanelWidth));
-            }
-        }
-        catch (Exception ex) when (ex is IOException or ArgumentOutOfRangeException)
-        {
-            // terminal vanished or the cell scrolled off; the next full frame fixes it
-        }
-        finally
-        {
-            RestoreCaret(caret);
-        }
-    }
-
-    private static void WriteBlock(string[] lines, int left, int top)
-    {
-        for (int i = 0; i < lines.Length; i++)
-        {
-            try
-            {
-                Console.SetCursorPosition(left, top + i);
-                AnsiConsole.Markup(lines[i]);
-            }
-            catch (Exception ex) when (ex is IOException or ArgumentOutOfRangeException)
-            {
-                return;
-            }
-        }
-    }
-
-    private static (int Left, int Top)? SaveCaret()
-    {
-        try
-        {
-            (int left, int top) = Console.GetCursorPosition();
-            return (left, top);
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-    }
-
-    private static void RestoreCaret((int Left, int Top)? caret)
-    {
-        if (caret is not (int left, int top))
-        {
-            return;
-        }
-
-        try
-        {
-            Console.SetCursorPosition(left, top);
-        }
-        catch (Exception ex) when (ex is IOException or ArgumentOutOfRangeException)
-        {
-            // the terminal closed mid-frame; nothing sensible to do
-        }
     }
 
     // ------------------------------------------------------------------ prompt

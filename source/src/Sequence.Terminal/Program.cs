@@ -68,7 +68,7 @@ public static class Program
         Console.WriteLine("Server mode. Two clients join this process:");
         Console.WriteLine($"  1. Start a client with '--client --host <this-pc-ip|public-ip> --port {port} --player your-id'.");
         Console.WriteLine($"  2. Bind interface: {DisplayAddress(bind)}.");
-        Console.WriteLine($"Deck seed {seed}; Player 1 is green, Player 2 is blue.");
+        Console.WriteLine($"Deck seed {seed}; each client requests its chip color on join (default: first green, second blue).");
 
         string saveName = save ?? GameStateStore.DefaultSaveName;
 
@@ -168,10 +168,11 @@ public static class Program
         }
 
         string playerId = Args.ArgString(args, "--player") ?? PromptPlayerId();
+        PlayerColor? preferredColor = ResolveClientColor(args);
 
         try
         {
-            NetworkGameRunner.Run(host, port, playerId, TimeSpan.FromSeconds(timeoutSeconds));
+            NetworkGameRunner.Run(host, port, playerId, preferredColor, TimeSpan.FromSeconds(timeoutSeconds));
         }
         catch (Exception ex)
         {
@@ -180,6 +181,37 @@ public static class Program
                 Console.WriteLine(line);
             }
         }
+    }
+
+    /// <summary>
+    /// The chip color a client asks for when it joins: an explicit <c>--color</c> flag
+    /// wins, otherwise the user is offered a picker (like the hot-seat game). Piped input
+    /// yields no preference, so the server auto-assigns.
+    /// </summary>
+    private static PlayerColor? ResolveClientColor(string[] args)
+    {
+        string? raw = Args.ArgString(args, "--color");
+        if (!string.IsNullOrWhiteSpace(raw))
+        {
+            if (!Enum.TryParse<PlayerColor>(raw, ignoreCase: true, out PlayerColor color) || color == PlayerColor.Red)
+            {
+                throw new ArgumentException($"Invalid --color '{raw}' - use one of green, blue, yellow, magenta, cyan.");
+            }
+
+            return color;
+        }
+
+        if (Console.IsInputRedirected)
+        {
+            return null;
+        }
+
+        return AnsiConsole.Prompt(
+            new SelectionPrompt<PlayerColor>()
+                .Title("Choose your chip color:")
+                .PageSize(6)
+                .AddChoices(Enum.GetValues<PlayerColor>().Where(c => c != PlayerColor.Red).ToArray())
+                .UseConverter(SpectreColorName));
     }
 
     private static string DisplayAddress(IPAddress address) =>

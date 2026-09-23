@@ -22,10 +22,19 @@ namespace Sequence.Terminal;
 /// </summary>
 public static class NetworkGameRunner
 {
-    public static void Run(string host, int port, string playerId, TimeSpan connectTimeout)
+    public static void Run(string host, int port, string playerId, PlayerColor? preferredColor, TimeSpan connectTimeout)
     {
         Console.OutputEncoding = Encoding.UTF8;
         AnsiConsole.Profile.Capabilities.Ansi = !Console.IsOutputRedirected;
+
+        // Quit reliably from any state (acting or waiting): the peer's socket closes,
+        // so the server notices and tells the opponent.
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            Console.WriteLine("Goodbye.");
+            Environment.Exit(0);
+        };
 
         using var client = new TcpClient();
         using (var cts = new CancellationTokenSource(connectTimeout))
@@ -35,17 +44,25 @@ public static class NetworkGameRunner
 
         NetworkStream stream = client.GetStream();
 
-        ProtocolFraming.WriteFrame(stream, JsonSerializer.SerializeToUtf8Bytes(new HelloMessage(playerId)));
+        ProtocolFraming.WriteFrame(stream, JsonSerializer.SerializeToUtf8Bytes(new HelloMessage(playerId, preferredColor)));
         using var messages = new ServerMessageChannel(stream);
         PlayerView view = ReceiveInitialGameStarted(messages);
+        messages.ViewerId = view.ViewerId;
 
         string? footer = null;
-        using (ITurnPump pump = TurnPump.Create(view, view.SequenceTarget, footer))
+        using (ITurnPump pump = TurnPump.Create())
         {
             while (true)
             {
-                pump.BeginTurn(view, view.SequenceTarget, footer, view.Viewer.Color);
-                TerminalRenderer.RenderFullScreen(view, view.SequenceTarget, footer, pump.Hover, pump.HoverColor, pump.HoveredHand);
+                // Adopt the freshest roster before drawing: if the opponent joined or
+                // reconnected while we were composing the last action, the next frame
+                // shows their announced name instead of the setup default.
+                while (messages.TryRead(0) is GameStartedMessage roster)
+                {
+                    view = roster.View;
+                }
+
+                TerminalRenderer.RenderFullScreen(view, view.SequenceTarget, footer);
                 footer = null;
 
                 if (view.Status == GameStatus.Won)
@@ -56,14 +73,21 @@ public static class NetworkGameRunner
 
                 if (view.ViewerId != view.CurrentPlayerId)
                 {
-                    // Opponent's turn: nothing to prompt for, just wait for the next update.
-                    (view, footer) = ReceiveNext(messages, view);
+                    // Opponent's turn: wait for their move, but surface their disconnect
+                    // right away and let this player leave with Ctrl+C or a typed 'quit'.
+                    (view, footer, bool leave) = WaitForOpponent(messages, view, footer, pump);
+                    if (leave)
+                    {
+                        Console.WriteLine("Goodbye.");
+                        return;
+                    }
+
                     continue;
                 }
 
-                // Your turn. While prompting, the pump prints any pending notice (for example
-                // the opponent quitting) straight onto the open line, instead of waiting until
-                // you finish typing and the next frame is rendered.
+                // Your turn. While prompting, print any pending notice (for example the
+                // opponent joining or quitting) straight onto the open line, instead of
+                // waiting until you finish typing and the next frame is rendered.
                 messages.ReportNoticesInline = true;
                 TurnCommand command;
                 try
@@ -124,8 +148,11 @@ public static class NetworkGameRunner
         {
             switch (messages.Read())
             {
-                case GameStartedMessage started:
-                    return (started.View, footer);
+                case GameStartedMessage:
+                    // Roster refresh pushed when the opponent joins/reconnects. It is a
+                    // cosmetic snapshot from before this action; the GameStateUpdatedMessage
+                    // that follows is the authoritative view, so this one is discarded.
+                    continue;
 
                 case GameStateUpdatedMessage updated:
                     return (updated.View, footer);
@@ -146,6 +173,72 @@ public static class NetworkGameRunner
 
     private static string DisconnectText(PlayerDisconnectedMessage notice) =>
         $"{notice.PlayerName} disconnected. They can reconnect with the same player id.";
+
+    /// <summary>
+    /// Waits while the opponent plays. Every incoming message is handed back so the frame
+    /// re-renders with it immediately - a disconnect notice is shown without further
+    /// interaction - and the waiting player can leave with Ctrl+C or a typed 'quit'.
+    /// </summary>
+    private static (PlayerView View, string? Footer, bool Leave) WaitForOpponent(
+        ServerMessageChannel messages, PlayerView current, string? footer, ITurnPump pump)
+    {
+        PlayerView view = current;
+        while (view.ViewerId != view.CurrentPlayerId)
+        {
+            if (messages.TryRead(250) is { } message)
+            {
+                switch (message)
+                {
+                    case GameStartedMessage started:
+                        return (started.View, footer, false);
+
+                    case GameStateUpdatedMessage updated:
+                        return (updated.View, footer, false);
+
+                    case ActionRejectedMessage rejected:
+                        return (view, JoinFooters(footer, rejected.Error.ToString()), false);
+
+                    case PlayerDisconnectedMessage disconnected:
+                        return (view, JoinFooters(footer, DisconnectText(disconnected)), false);
+                }
+            }
+            else if (LeaveRequested(pump))
+            {
+                return (view, footer, true);
+            }
+        }
+
+        return (view, footer, false);
+    }
+
+    /// <summary>True when the player typed a quit command on the open console line while waiting.</summary>
+    private static bool LeaveRequested(ITurnPump pump)
+    {
+        if (!OperatingSystem.IsWindows() || Console.IsInputRedirected)
+        {
+            return false; // no live console keys to read (piped input, CI, smokes)
+        }
+
+        try
+        {
+            if (!Console.KeyAvailable)
+            {
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or PlatformNotSupportedException)
+        {
+            return false;
+        }
+
+        return IsQuit(pump.Next(null));
+    }
+
+    private static bool IsQuit(string? line) =>
+        !string.IsNullOrWhiteSpace(line)
+        && (line.Trim().Equals("quit", StringComparison.OrdinalIgnoreCase)
+            || line.Trim().Equals("q", StringComparison.OrdinalIgnoreCase)
+            || line.Trim().Equals("exit", StringComparison.OrdinalIgnoreCase));
 
     private static string? JoinFooters(string? existing, string next) =>
         existing is null ? next : $"{existing}\n{next}";
@@ -169,6 +262,19 @@ public static class NetworkGameRunner
             _stream = stream;
             _pump = Task.Run(ReadLoop);
         }
+
+        /// <summary>
+        /// The viewer's seat, used to name an opponent who just joined in inline notices.
+        /// Written once, before the frame loop starts reading; the read loop only uses it
+        /// after the initial game has started.
+        /// </summary>
+        public PlayerId ViewerId
+        {
+            get => new(_viewerIdValue);
+            set => _viewerIdValue = value.Value;
+        }
+
+        private volatile int _viewerIdValue = -1; // -1 until the initial game starts (seat ids are 0/1)
 
         /// <summary>
         /// When true, a pending <see cref="PlayerDisconnectedMessage"/> is printed onto the
@@ -204,12 +310,23 @@ public static class NetworkGameRunner
                         continue; // can never happen with our own server; stay robust anyway
                     }
 
-                    if (message is PlayerDisconnectedMessage notice && _reportNoticesInline)
+                    if (_reportNoticesInline)
                     {
                         lock (_printGate)
                         {
-                            Console.WriteLine();
-                            AnsiConsole.MarkupLine($"[red]{Markup.Escape(DisconnectText(notice))}[/]");
+                            switch (message)
+                            {
+                                case PlayerDisconnectedMessage notice:
+                                    Console.WriteLine();
+                                    AnsiConsole.MarkupLine($"[red]{Markup.Escape(DisconnectText(notice))}[/]");
+                                    break;
+
+                                case GameStartedMessage joined when _viewerIdValue >= 0:
+                                    Console.WriteLine();
+                                    var joiner = joined.View.Players.Single(p => p.Id.Value != _viewerIdValue);
+                                    AnsiConsole.MarkupLine($"[bold]{Markup.Escape(joiner.Name)}[/] joined the game.");
+                                    break;
+                            }
                         }
                     }
 
@@ -240,6 +357,27 @@ public static class NetworkGameRunner
             {
                 throw new IOException("The server closed the connection.");
             }
+        }
+
+        /// <summary>
+        /// The next buffered server message within <paramref name="timeoutMilliseconds"/>,
+        /// or null when the wait timed out. Throws when the pump terminated (the server
+        /// closed the connection).
+        /// </summary>
+        public ServerMessage? TryRead(int timeoutMilliseconds)
+        {
+            ValueTask<bool> wait = _messages.Reader.WaitToReadAsync();
+            if (!wait.AsTask().Wait(TimeSpan.FromMilliseconds(timeoutMilliseconds)))
+            {
+                return null;
+            }
+
+            if (_messages.Reader.TryRead(out ServerMessage? message))
+            {
+                return message;
+            }
+
+            throw new IOException("The server closed the connection.");
         }
 
         public void Dispose()
