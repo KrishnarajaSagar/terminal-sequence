@@ -49,21 +49,21 @@ public static class NetworkGameRunner
         PlayerView view = ReceiveInitialGameStarted(messages);
         messages.ViewerId = view.ViewerId;
 
-        // Interactive consoles get a short lobby frame: it shows connection status and a
-        // waiting message, and leaves as soon as an opponent-related message arrives (the
-        // roster refresh the host pushes when they join) or within a short grace. The
-        // grace matters because the second client receives no new message on its own join
-        // and must not sit in the lobby forever. Esc disconnects and returns to the menu.
+        // Interactive consoles show the lobby frame. Every player stays in it until the host
+        // explicitly starts the game -- the GameStartMessage broadcast once both seats are
+        // filled -- so nobody drops onto the board early. A roster push announcing the
+        // opponent's join just refreshes the waiting view. Esc leaves and returns to the
+        // menu.
         if (!Console.IsInputRedirected)
         {
-            PlayerView? lobbyView = WaitForOpponentInLobby(messages, view, host, port);
-            if (lobbyView is null)
+            PlayerView? startView = WaitForHostStart(messages, view, host, port);
+            if (startView is null)
             {
                 Console.WriteLine("Left the lobby. Goodbye.");
                 return;
             }
 
-            view = lobbyView;
+            view = startView;
         }
 
         string? footer = null;
@@ -152,34 +152,41 @@ public static class NetworkGameRunner
     }
 
     /// <summary>
-    /// The brief connected-lobby wait. Renders every tick, exits with the first message
-    /// that confirms the game can proceed (a roster refresh or a state update), and falls
-    /// through to the board when nothing arrives within the grace period. Returns null
-    /// when the player presses Escape to leave the lobby.
+    /// The connected-lobby wait: renders every tick and leaves with the
+    /// <see cref="GameStartMessage"/> the host broadcasts once both seats are filled. A
+    /// roster refresh announcing the opponent's join (the first player's view) or a state
+    /// update is adopted for display, but the lobby keeps waiting for the host's explicit
+    /// start. Returns null when Escape leaves the lobby.
     /// </summary>
-    private static PlayerView? WaitForOpponentInLobby(ServerMessageChannel messages, PlayerView initial, string host, int port)
+    private static PlayerView? WaitForHostStart(ServerMessageChannel messages, PlayerView initial, string host, int port)
     {
         PlayerView view = initial;
-        DateTime deadline = DateTime.UtcNow + ClientLobbyGrace;
+        bool opponentJoined = view.Viewer.Id != new PlayerId(0);
 
-        while (DateTime.UtcNow < deadline)
+        while (true)
         {
-            LobbyScreen.RenderClient(AnsiConsole.Console, host, port, view);
+            LobbyScreen.RenderClient(AnsiConsole.Console, host, port, view, opponentJoined);
 
             if (messages.TryRead(100) is { } message)
             {
-                if (message is GameStartedMessage started)
+                switch (message)
                 {
-                    return started.View;
-                }
+                    case GameStartMessage started:
+                        return started.View;
 
-                if (message is GameStateUpdatedMessage updated)
-                {
-                    return updated.View;
-                }
+                    case GameStartedMessage roster:
+                        opponentJoined = true;
+                        view = roster.View;
+                        break;
 
-                // A disconnect notice or a rejection while nobody has begun is not
-                // playable yet; keep polling until the roster confirms the opponent.
+                    case GameStateUpdatedMessage updated:
+                        return updated.View;
+
+                    default:
+                        // A disconnect notice or a rejection before the game begins is not
+                        // playable; keep polling until the host starts the game.
+                        break;
+                }
             }
 
             if (ConsoleKeys.EscapePressed())
@@ -187,11 +194,7 @@ public static class NetworkGameRunner
                 return null;
             }
         }
-
-        return view;
     }
-
-    private static readonly TimeSpan ClientLobbyGrace = TimeSpan.FromSeconds(3);
 
     /// <summary>
     /// Blocks until a state-bearing message arrives. Informational noise (an opponent

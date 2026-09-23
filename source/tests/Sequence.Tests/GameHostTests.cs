@@ -341,6 +341,29 @@ public class GameHostTests
         }
     }
 
+    [Fact]
+    public async Task When_The_Host_Starts_The_Game_Both_Connected_Seats_Leave_The_Lobby_At_Once()
+    {
+        await using GameHost host = NewHost(out _);
+        await using var first = new TestClient { Id = FirstId };
+        await using var second = new TestClient { Id = SecondId };
+
+        PlayerView firstView = Assert.IsType<GameStartedMessage>(await first.JoinAsync(host.Port, FirstId)).View;
+        PlayerView secondView = Assert.IsType<GameStartedMessage>(await second.JoinAsync(host.Port, SecondId)).View;
+        await DrainFirstRosterRefresh(first);
+
+        // The host's explicit start un-gates both connected seats in a single round, so
+        // neither client sits in the lobby any longer waiting for the other player.
+        host.StartGame();
+
+        PlayerView firstStart = Assert.IsType<GameStartMessage>(await first.AwaitServerMessageAsync()).View;
+        PlayerView secondStart = Assert.IsType<GameStartMessage>(await second.AwaitServerMessageAsync()).View;
+        Assert.Equal(firstView.ViewerId, firstStart.ViewerId);
+        Assert.Equal(secondView.ViewerId, secondStart.ViewerId);
+        Assert.Equal(2, firstStart.Players.Count);
+        Assert.Equal(2, secondStart.Players.Count);
+    }
+
     private sealed class TestClient : IAsyncDisposable
     {
         private readonly TcpClient _tcp = new();

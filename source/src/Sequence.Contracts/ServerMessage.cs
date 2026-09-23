@@ -9,6 +9,7 @@ namespace Sequence.Contracts;
 /// </summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(GameStartedMessage), "gameStarted")]
+[JsonDerivedType(typeof(GameStartMessage), "gameStart")]
 [JsonDerivedType(typeof(GameStateUpdatedMessage), "gameStateUpdated")]
 [JsonDerivedType(typeof(ActionRejectedMessage), "actionRejected")]
 [JsonDerivedType(typeof(PlayerDisconnectedMessage), "playerDisconnected")]
@@ -16,6 +17,12 @@ public abstract record ServerMessage;
 
 /// <summary>Sent to a client when it first connects, describing the game as it stands.</summary>
 public sealed record GameStartedMessage(PlayerView View) : ServerMessage;
+
+/// <summary>
+/// Sent to every connected client when the host starts the game. Until this arrives the
+/// players stay in their lobbies; it is the signal that play may begin.
+/// </summary>
+public sealed record GameStartMessage(PlayerView View) : ServerMessage;
 
 /// <summary>Sent after a successful action: the receiver's updated view plus the events produced.</summary>
 public sealed record GameStateUpdatedMessage(PlayerView View, IReadOnlyList<GameEvent> Events) : ServerMessage;

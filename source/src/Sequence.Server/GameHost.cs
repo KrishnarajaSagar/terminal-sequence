@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -78,6 +79,42 @@ public sealed partial class GameHost : IAsyncDisposable
     }
 
     public void Stop() => StopAsync().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// The explicit "begin play" signal from the host: broadcasts a
+    /// <see cref="GameStartMessage"/> with each client's own view to every registered
+    /// client, so both lobbies release together. Call it once both seats hold a registered
+    /// client; with fewer it is a no-op. A write to a vanished peer is ignored here; the
+    /// accept loop notices and cleans that peer up.
+    /// </summary>
+    public void StartGame()
+    {
+        if (_clients.Values.Count(c => c.Registered) < 2)
+        {
+            return;
+        }
+
+        foreach (ClientConnection connection in _clients.Values)
+        {
+            if (!connection.Registered)
+            {
+                continue;
+            }
+
+            try
+            {
+                connection.SendFrameAsync(
+                    EncodeServerMessage(new GameStartMessage(_server.GetPlayerView(connection.Seat))),
+                    CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch (IOException)
+            {
+            }
+            catch (SocketException)
+            {
+            }
+        }
+    }
 
     public ValueTask DisposeAsync()
     {

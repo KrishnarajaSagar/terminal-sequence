@@ -16,14 +16,16 @@ public static class LobbyScreen
 {
     /// <summary>
     /// Renders the host's status frame: where it listens, which seats are filled, and a
-    /// waiting message until both players are connected.
+    /// waiting or start message. Until the host begins the game, players on the other side
+    /// of the wire sit in their connected lobbies waiting for the host's go.
     /// </summary>
     public static void RenderHost(
         IAnsiConsole console,
         string bindText,
         int port,
         IReadOnlyList<HostRosterEntry> roster,
-        string localAddresses)
+        string localAddresses,
+        bool started)
     {
         console.Clear();
         MenuUi.RenderTitle(console, "HOSTING", "run a server other players join");
@@ -44,19 +46,26 @@ public static class LobbyScreen
 
         console.MarkupLine("");
         int connected = roster.Count(e => e.Connected);
-        switch (connected)
+        if (started)
         {
-            case 0:
-                console.MarkupLine("[bold yellow]Waiting for the first player to join...[/]");
-                break;
+            console.MarkupLine("[green]The game has already started. Players are playing now.[/]");
+        }
+        else
+        {
+            switch (connected)
+            {
+                case 0:
+                    console.MarkupLine("[bold yellow]Waiting for the first player to join...[/]");
+                    break;
 
-            case 1:
-                console.MarkupLine("[bold yellow]Waiting for the second player to join...[/]");
-                break;
+                case 1:
+                    console.MarkupLine("[bold yellow]Waiting for the second player to join...[/]");
+                    break;
 
-            default:
-                console.MarkupLine("[green]Both players connected - the game has started.[/]");
-                break;
+                default:
+                    console.MarkupLine("[bold green]Both players connected. Press Enter to start the game.[/]");
+                    break;
+            }
         }
 
         console.MarkupLine("");
@@ -66,9 +75,15 @@ public static class LobbyScreen
 
     /// <summary>
     /// Renders the client's connected frame: where it reached, its own seat and chip
-    /// colour, and a waiting message until the opponent connects.
+    /// colour, and the waiting message until <paramref name="opponentJoined"/> and the
+    /// host begins the game.
     /// </summary>
-    public static void RenderClient(IAnsiConsole console, string host, int port, PlayerView view)
+    public static void RenderClient(
+        IAnsiConsole console,
+        string host,
+        int port,
+        PlayerView view,
+        bool opponentJoined = false)
     {
         console.Clear();
         MenuUi.RenderTitle(console, "JOINED", "connected; the game has not started yet");
@@ -80,11 +95,21 @@ public static class LobbyScreen
         console.MarkupLine("");
         console.MarkupLine($"[bold]Connected to[/] [white]{Markup.Escape(host)}:{port}[/]");
         console.MarkupLine($"  Player {viewer.Id.Value + 1}: {Markup.Escape(viewer.Name)}  {viewerDot} {viewer.Color}");
-        console.MarkupLine($"  Player {opponent.Id.Value + 1}: {Markup.Escape(opponent.Name)}  [red]waiting for the second player...[/]");
+        if (opponentJoined)
+        {
+            string opponentDot = $"[{TerminalRenderer.ColorName(opponent.Color)}]●[/]";
+            console.MarkupLine($"  Player {opponent.Id.Value + 1}: {Markup.Escape(opponent.Name)}  {opponentDot} [green]connected, waiting for the host to start[/]");
+        }
+        else
+        {
+            console.MarkupLine($"  Player {opponent.Id.Value + 1}: {Markup.Escape(opponent.Name)}  [red]waiting to connect...[/]");
+        }
 
         console.MarkupLine("");
-        console.MarkupLine("[bold yellow]Waiting for the other player to connect...[/]");
-        console.MarkupLine("[dim]The game begins automatically once both players are connected.[/]");
+        console.MarkupLine(opponentJoined
+            ? "[bold green]Both players connected. Waiting for the host to start the game...[/]"
+            : "[bold yellow]Waiting for the other player to connect...[/]");
+        console.MarkupLine("[dim]The host starts the game once everyone is connected.[/]");
         console.MarkupLine("[dim]Esc disconnects and returns to the main menu.[/]");
     }
 

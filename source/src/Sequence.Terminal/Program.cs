@@ -177,8 +177,9 @@ public static class Program
 
     /// <summary>
     /// Interactive host lobby: renders who is connected, polls the roster so a joined
-    /// player appears without any new server events, and stops the server on Esc or
-    /// Ctrl+C so the menu can take the host back to the main menu.
+    /// player appears without any new server events, and lets the host press Enter to
+    /// begin the game once both seats are filled. Esc or Ctrl+C stops the server so the
+    /// menu can take the host back to the main menu.
     /// </summary>
     private static void RunHostLobby(GameHost host)
     {
@@ -191,10 +192,18 @@ public static class Program
 
         string bindText = DisplayAddress(host.BindAddress);
         string localAddresses = string.Join(", ", LocalIPv4Addresses());
+        bool started = false;
 
         while (!wait.IsSet)
         {
-            LobbyScreen.RenderHost(AnsiConsole.Console, bindText, host.Port, host.Roster, localAddresses);
+            LobbyScreen.RenderHost(AnsiConsole.Console, bindText, host.Port, host.Roster, localAddresses, started);
+
+            if (!started && host.Roster.Count(e => e.Connected) == 2 && ConsoleKeys.EnterPressed())
+            {
+                host.StartGame();
+                started = true;
+                continue;
+            }
 
             if (ConsoleKeys.EscapePressed())
             {

@@ -35,4 +35,31 @@ internal static class ConsoleKeys
 
         return Console.ReadKey(intercept: true).Key == ConsoleKey.Escape;
     }
+
+    /// <summary>
+    /// True when an Enter key is waiting on the console. Same non-blocking, input-redirected
+    /// safe semantics as <see cref="EscapePressed"/>.
+    /// </summary>
+    public static bool EnterPressed()
+    {
+        if (!OperatingSystem.IsWindows() || Console.IsInputRedirected)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (!Console.KeyAvailable)
+            {
+                return false;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or PlatformNotSupportedException)
+        {
+            return false;
+        }
+
+        ConsoleKey key = Console.ReadKey(intercept: true).Key;
+        return key == ConsoleKey.Enter;
+    }
 }
