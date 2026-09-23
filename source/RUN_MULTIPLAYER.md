@@ -2,22 +2,42 @@
 
 The server owns the authoritative `GameState`; clients send actions and receive only the
 `PlayerView` the server allows. This guide covers playing against a server on another
-machine/network. The terminal client must run on each player's machine; nothing needs to be
-**installed** beyond the files described below (no SDK required).
+machine/network. The terminal client must run on each player's machine.
 
-## Build and copy the client
+There are two ways to get the game onto another machine. **Copying the published exe is
+fastest**; the one-click script below is for when each player would rather build from the
+pulled source.
 
-`dotnet publish` produces a single self-contained exe that runs on any 64-bit Windows
-without a .NET install:
+## One-click build (after pulling the source)
+
+`source\publish-game.cmd` builds the terminal client and writes it to `source\publish\`
+next to itself. Double-click it on the machine that will host. Add a trailing argument on
+the command line if you need the no-runtime bundle instead:
+
+```
+publish-game.cmd selfcontained     :: ~60 MB single exe, no .NET install needed on players
+publish-game.cmd                   :: small exe, players install .NET 8 Runtime
+```
+
+Then copy `source\publish\Sequence.Terminal.exe` to each player's machine (just that one
+file; skip the `.pdb`). If the same machine also hosts the server, run the exe there too.
+
+## Build and copy the client (by hand, equivalent to the script)
+
+Framework-dependent (small; players need the .NET 8 Runtime):
+
+```
+dotnet publish source/src/Sequence.Terminal/Sequence.Terminal.csproj -c Release -o publish
+```
+
+Self-contained single file (no runtime on the players; ~60 MB):
 
 ```
 dotnet publish source/src/Sequence.Terminal/Sequence.Terminal.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
 ```
 
 Copy only `publish\Sequence.Terminal.exe` to each player's machine (ignore the `.pdb`
-files). For a much smaller file you can instead copy
-`source\src\Sequence.Terminal\bin\Release\net8.0\Sequence.Terminal.exe` and install the
-.NET 8 Runtime there. Copy the server side too if the same machine will host.
+files).
 
 ## Server flags
 
@@ -39,6 +59,23 @@ Sequence.Terminal.exe --client --host <server-ip> --port 5000 --player your-id
 * `--host` - IP (IPv4/IPv6) or host name; no scheme or port.
 * `--player` - your identity (seat binding/reconnect); each player must use a different id.
 * `--timeout <seconds>` - connect timeout (default 10) before a "timeout" report.
+
+## Who starts the game
+
+The game does **not** start automatically. Every seat runs the game with an interactive
+menu; the workflow (same for LAN and the public internet) is:
+
+1. The host machine runs the server (see below). The host window shows its bind address,
+   port, and the two seats.
+2. Each player runs the client and picks **Join**, entering the host's IP, the port, and
+   their own ID.
+3. As each seat connects, the lobby on every machine shows the connected seats. The host
+   window changes to "Both players connected. Press Enter to start the game."
+4. The host presses **Enter**; both clients leave the lobby and the board appears on all
+   three screens at once.
+
+While waiting, **Esc** returns that machine's client to the main menu; the host can **Esc**
+out of the lobby to stop the server and return to its menu too.
 
 ## Same LAN
 
